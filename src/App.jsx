@@ -1,13 +1,44 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { saveAs } from "file-saver";
-import { jsPDF } from "jspdf";
+
+/* ==== utilitaires de téléchargement (robustes, sans dépendances obligatoires) ==== */
+async function saveFile(dataOrUrl, filename) {
+  // Essaie file-saver si dispo ; sinon fallback <a download>
+  try {
+    const mod = await import("file-saver"); // dynamique
+    const saveAs = mod.saveAs || mod.default;
+    return saveAs(dataOrUrl, filename);
+  } catch {
+    const url =
+      typeof dataOrUrl === "string"
+        ? dataOrUrl
+        : URL.createObjectURL(dataOrUrl);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    if (typeof dataOrUrl !== "string") {
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+  }
+}
+
+async function getJsPDF() {
+  // Charge jsPDF dynamiquement ; sinon essaie window.jspdf (CDN).
+  try {
+    const m = await import("jspdf");
+    return m.jsPDF || m.default;
+  } catch {
+    return window.jspdf?.jsPDF || null;
+  }
+}
 
 /* -----------------------------------------------------------
    BRICKLINK – palette de référence pour corréler les couleurs
    (Codes = BrickLink Color IDs ; hex ≈ approximations réalistes)
    ----------------------------------------------------------- */
 const BL = [
-  // opaques courants
   ["White", "#F2F3F2", 1, false],
   ["Black", "#000000", 26, false],
   ["Very Light Gray", "#E6E6E6", 49, false],
@@ -27,15 +58,15 @@ const BL = [
   ["Medium Nougat", "#AE7A59", 150, false],
   ["Reddish Brown", "#5C1E0F", 88, false],
   ["Brown", "#6B3F20", 8, false],
-  ["Fabuland Brown", "#C56E2D", 160, false], // ancien ton, approx
-  ["Pink", "#FFB5D1", 221, false],           // nom BL: "Pink"
-  ["Dark Pink", "#DA70D6", 47, false],       // proche "Bright Pink"
-  ["Magenta", "#A0006D", 71, false],         // "Magenta" / "Bright Reddish Violet"
+  ["Fabuland Brown", "#C56E2D", 160, false],
+  ["Pink", "#FFB5D1", 221, false],
+  ["Dark Pink", "#DA70D6", 47, false],
+  ["Magenta", "#A0006D", 71, false],
   ["Blue", "#0055BF", 7, false],
   ["Dark Blue", "#0B3B8F", 63, false],
   ["Medium Blue", "#6C9BD2", 42, false],
   ["Bright Light Blue", "#9BC4E2", 102, false],
-  ["Royal Blue", "#2C4DA7", 272, false],     // approx (Old "Royal Blue")
+  ["Royal Blue", "#2C4DA7", 272, false],
   ["Dark Azure", "#0072A3", 153, false],
   ["Medium Azure", "#36A3E1", 156, false],
   ["Sand Blue", "#6074A1", 55, false],
@@ -51,7 +82,7 @@ const BL = [
   ["Coral", "#FF6F61", 353, false],
   ["Sand Red", "#A75D5E", 58, false],
 
-  // transparents (sélection large)
+  // transparents
   ["Trans-Clear", "#E6F2F2", 12, true],
   ["Trans-Black", "#635F52", 251, true],
   ["Trans-Red", "#DE0000", 17, true],
@@ -61,7 +92,7 @@ const BL = [
   ["Trans-Neon Yellow", "#E9F72C", 121, true],
   ["Trans-Green", "#5AC35E", 20, true],
   ["Trans-Neon Green", "#C0FF00", 16, true],
-  ["Trans-Blue", "#0094FF", 43, true],         // proche "Trans-Blue"
+  ["Trans-Blue", "#0094FF", 43, true],
   ["Trans-Dark Blue", "#0B2E6F", 14, true],
   ["Trans-Medium Blue", "#6EC1E4", 74, true],
   ["Trans-Light Blue", "#A3D2F2", 15, true],
@@ -72,11 +103,9 @@ const BL = [
 ];
 
 /* -----------------------------------------------------------
-   PALETTE DU FOURNISSEUR KKBBRICKS (images que tu as envoyées)
-   - code fournisseur (01..99), nom exact, hex ≈ (visuel), isTrans
+   PALETTE FOURNISSEUR KKBBRICKS (codes 01→99) – d’après tes planches
    ----------------------------------------------------------- */
 const SUPPLIER = [
-  // 01–16
   [1, "White", "#F2F3F2", false],
   [2, "Very Light Gray", "#E6E6E6", false],
   [3, "Light Gray", "#9BA19D", false],
@@ -93,7 +122,6 @@ const SUPPLIER = [
   [14, "Medium Nougat", "#AE7A59", false],
   [15, "Flesh", "#D78E76", false],
   [16, "Fabuland Brown", "#C56E2D", false],
-  // 17–32
   [17, "Brown", "#6B3F20", false],
   [18, "Dark Brown", "#4C2F27", false],
   [19, "Tan", "#E4CD9E", false],
@@ -110,7 +138,6 @@ const SUPPLIER = [
   [30, "Red", "#C91A09", false],
   [31, "Dark Red", "#720E0F", false],
   [32, "Sand Red", "#A75D5E", false],
-  // 33–48
   [33, "Lavender", "#CDA4DE", false],
   [34, "Medium Lavender", "#A06EBB", false],
   [35, "Purple", "#6A0DAD", false],
@@ -127,7 +154,6 @@ const SUPPLIER = [
   [46, "Olive Green", "#808E42", false],
   [47, "Sand Green", "#A3C3A2", false],
   [48, "Dark Turquoise", "#008A8A", false],
-  // 49–54 & trans 85–99 (d’après tes planches)
   [49, "Bright Green", "#4B9F4A", false],
   [50, "Green", "#237841", false],
   [51, "Dark Green", "#184632", false],
@@ -151,7 +177,7 @@ const SUPPLIER = [
   [99, "Trans-Medium Blue", "#6EC1E4", true],
 ];
 
-/* --------------- utilitaires --------------- */
+/* ========== helpers couleur & corrélation ========== */
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const sqr = (x) => x * x;
 const hexToRgb = (h) => {
@@ -171,8 +197,6 @@ const nearestIdx = ([r, g, b], pal) => {
   return idx;
 };
 
-/* corrélation fournisseur → BrickLink
-   renvoie une palette : [label, rgb, codeBL, isTrans, meta] */
 function correlateSupplierToBL(listSupplier, listBL) {
   const bl = listBL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]);
   return listSupplier.map(([supCode, name, hex, isTrans]) => {
@@ -182,14 +206,13 @@ function correlateSupplierToBL(listSupplier, listBL) {
     return [
       `${name} (#${String(supCode).padStart(2, "0")})`,
       rgb,
-      blCode,                         // code BL estimé/voisin
+      blCode,                      // code BrickLink estimé
       isTrans || blTrans,
       { supplierCode: supCode, supplierName: name, blName, blCode },
     ];
   });
 }
 
-/* crop au ratio W×H et scale vers la grille */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   const ctx = target.getContext("2d", { willReadFrequently: true });
   target.width = gridW; target.height = gridH;
@@ -204,26 +227,22 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW, gridH);
 }
 
+/* ===================== APP ===================== */
 export default function App() {
-  /* images */
   const [files, setFiles] = useState([]);
   const [images, setImages] = useState([]);
   const [idxImg, setIdxImg] = useState(0);
 
-  /* grille */
   const [W, setW] = useState(48);
   const [H, setH] = useState(64);
 
-  /* cadrage */
   const [zoom, setZoom] = useState(1.15);
   const [offX, setOffX] = useState(0);
   const [offY, setOffY] = useState(0);
 
-  /* palette source */
-  const [useSupplier, setUseSupplier] = useState(true); // ← par défaut : toutes tes couleurs
-  const [inclTrans, setInclTrans] = useState(true);     // toggle trans (fournisseur ou BL)
+  const [useSupplier, setUseSupplier] = useState(true);
+  const [inclTrans, setInclTrans] = useState(true);
 
-  /* rendu/sections */
   const [showNumbers, setShowNumbers] = useState(true);
   const [secCols, setSecCols] = useState(3);
   const [secRows, setSecRows] = useState(4);
@@ -232,7 +251,6 @@ export default function App() {
   const tinyRef = useRef(null);
   const [counts, setCounts] = useState([]);
 
-  /* charger images */
   useEffect(() => {
     if (!files.length) { setImages([]); return; }
     let cancel = false;
@@ -247,24 +265,19 @@ export default function App() {
     return () => { cancel = true; };
   }, [files]);
 
-  /* palettes prêtes à l’emploi */
   const PAL_SUPPLIER = useMemo(() => correlateSupplierToBL(SUPPLIER, BL), []);
   const PAL_BL = useMemo(() => BL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]), []);
-
-  /* palette effective utilisée pour la quantification */
   const palette = useMemo(() => {
     const src = useSupplier ? PAL_SUPPLIER : PAL_BL;
-    return src.filter((p) => (inclTrans ? true : !p[3])); // p[3] = isTrans
+    return src.filter((p) => (inclTrans ? true : !p[3]));
   }, [useSupplier, inclTrans, PAL_SUPPLIER, PAL_BL]);
 
-  /* pipeline principal */
   function process(img) {
     const tiny = tinyRef.current, mosaic = mosaicRef.current;
     drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
     const id = tiny.getContext("2d").getImageData(0, 0, W, H);
     const data = id.data;
 
-    // quantification nearest
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
       const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
@@ -273,7 +286,6 @@ export default function App() {
     }
     tiny.getContext("2d").putImageData(id, 0, 0);
 
-    // comptage
     const cts = new Map();
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
@@ -283,7 +295,6 @@ export default function App() {
     }
     setCounts([...cts.entries()].sort((a, b) => b[1] - a[1]));
 
-    // rendu
     const cell = 14;
     mosaic.width = W * cell; mosaic.height = H * cell;
     const g = mosaic.getContext("2d"); g.clearRect(0, 0, mosaic.width, mosaic.height);
@@ -306,12 +317,10 @@ export default function App() {
       }
     }
 
-    // grille
     g.strokeStyle = "rgba(0,0,0,0.18)"; g.lineWidth = 1;
     for (let i = 0; i <= W; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, H * cell); g.stroke(); }
     for (let j = 0; j <= H; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(W * cell, j * cell); g.stroke(); }
 
-    // sections
     if (secCols > 0 && secRows > 0) {
       const sW = Math.floor(W / secCols), sH = Math.floor(H / secRows);
       g.strokeStyle = "#ddd"; g.lineWidth = 4;
@@ -330,12 +339,12 @@ export default function App() {
     images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, showNumbers, secCols, secRows
   ]);
 
-  /* exports */
-  function exportPNG() {
+  /* ==== Exports ==== */
+  async function exportPNG() {
     const url = mosaicRef.current.toDataURL("image/png");
-    saveAs(url, `mosaic_${W}x${H}_${useSupplier ? "supplier" : "BL"}_${inclTrans ? "withTrans" : "opaque"}.png`);
+    await saveFile(url, `mosaic_${W}x${H}_${useSupplier ? "supplier" : "BL"}_${inclTrans ? "withTrans" : "opaque"}.png`);
   }
-  function exportCSV() {
+  async function exportCSV() {
     const tiny = tinyRef.current, ctx = tiny.getContext("2d");
     const id = ctx.getImageData(0, 0, tiny.width, tiny.height), data = id.data;
     const rows = [];
@@ -348,16 +357,18 @@ export default function App() {
       }
       rows.push(cols.join(";"));
     }
-    saveAs(new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" }), `matrix_codes_${W}x${H}.csv`);
+    await saveFile(new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" }), `matrix_codes_${W}x${H}.csv`);
 
     const list = counts.map(([name, qty]) => {
       const p = palette.find((q) => q[0] === name) || [];
       return `[${p[2] ?? "?"}] ${name};${qty}`;
     });
-    saveAs(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${W}x${H}.csv`);
+    await saveFile(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${W}x${H}.csv`);
   }
-  function exportPDF_A3() {
-    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a3" });
+  async function exportPDF_A3() {
+    const JsPDF = await getJsPDF();
+    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou active le CDN."); return; }
+    const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a3" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight(), m = 12;
     doc.setFontSize(18);
     doc.text(`Brick Mosaic ${W}×${H} — ${useSupplier ? "Supplier" : "BrickLink"} ${inclTrans ? "(+Trans)" : "(Opaque)"}`, Wp / 2, 12, { align: "center" });
@@ -379,10 +390,12 @@ export default function App() {
     });
     doc.save(`print_A3_${W}x${H}.pdf`);
   }
-  function exportPDF_Sections() {
+  async function exportPDF_Sections() {
+    const JsPDF = await getJsPDF();
+    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou active le CDN."); return; }
     const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
     const sW = Math.floor(Gx / secCols), sH = Math.floor(Gy / secRows);
-    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight();
     const m = 10, uW = Wp - 2 * m, uH = Hp - 2 * m - 10, cell = Math.min(uW / sW, uH / sH);
     const ctx = tiny.getContext("2d"), id = ctx.getImageData(0, 0, Gx, Gy), data = id.data;
@@ -417,17 +430,16 @@ export default function App() {
       <div className="max-w-7xl mx-auto space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">BrickMosaic Pro — Palette fournisseur + codes BrickLink</h1>
-          <div className="text-xs opacity-70">W×H indépendants · numéros par plot · sections · PNG/CSV/PDF</div>
+          <div className="text-xs opacity-70">W×H indépendants · numéros · sections · PNG/CSV/PDF</div>
         </header>
 
         <div className="grid lg:grid-cols-3 gap-4">
-          {/* colonne réglages */}
+          {/* réglages */}
           <div className="bg-white rounded-2xl shadow p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
               <input type="file" accept="image/*" multiple onChange={(e) => {
-                const f = e.target.files; if (!f) return;
-                setFiles(Array.from(f)); setIdxImg(0);
+                const f = e.target.files; if (!f) return; setFiles(Array.from(f)); setIdxImg(0);
               }} />
               {images.length > 0 && (
                 <div className="flex items-center gap-2 mt-2">
@@ -441,7 +453,7 @@ export default function App() {
             </div>
 
             <div className="space-y-2">
-              <label className="block text-sm font-medium">2) Grille (colonnes × lignes) : {W} × {H}</label>
+              <label className="block text-sm font-medium">2) Grille : {W} × {H}</label>
               <div className="grid grid-cols-2 gap-2">
                 <div><span className="text-xs">Largeur</span>
                   <input type="range" min={24} max={128} step={1} value={W} onChange={(e) => setW(parseInt(e.target.value, 10))} className="w-full" />
@@ -474,7 +486,7 @@ export default function App() {
               <label className="text-sm font-medium">4) Numérotation & sections</label>
               <div className="flex items-center gap-2">
                 <input id="nums" type="checkbox" checked={showNumbers} onChange={(e) => setShowNumbers(e.target.checked)} />
-                <label htmlFor="nums" className="text-sm">Afficher les numéros (codes BrickLink)</label>
+                <label htmlFor="nums" className="text-sm">Afficher les codes BrickLink</label>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-sm">Colonnes : <input type="number" min={1} className="border rounded px-2 py-1 w-20 ml-2" value={secCols} onChange={(e) => setSecCols(parseInt(e.target.value, 10) || 1)} /></label>
@@ -499,14 +511,14 @@ export default function App() {
               <button className="w-full bg-black text-white rounded-xl py-2" onClick={() => images[idxImg] && process(images[idxImg])} disabled={!images.length}>Générer l’aperçu</button>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
-                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (codes + pièces)</button>
+                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV</button>
                 <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (aperçu + légende)</button>
                 <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections ({secCols}×{secRows})</button>
               </div>
             </div>
           </div>
 
-          {/* colonne aperçu & palettes */}
+          {/* aperçu & palette */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
             <div className="overflow-auto w-full border rounded-xl">
               <canvas ref={mosaicRef} className="w-full h-auto" />
@@ -514,8 +526,7 @@ export default function App() {
 
             <div>
               <h3 className="font-semibold mb-2">
-                Palette utilisée ({palette.length} couleurs) — {useSupplier ? "Fournisseur KKBBRICKS" : "BrickLink"}
-                {inclTrans ? " (+Trans)" : " (Opaque)"}
+                Palette utilisée ({palette.length} couleurs) — {useSupplier ? "Fournisseur" : "BrickLink"} {inclTrans ? "(+Trans)" : "(Opaque)"}
               </h3>
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
                 {palette.map(([label, rgb, code, isTrans]) => (
@@ -536,10 +547,9 @@ export default function App() {
           </div>
         </div>
 
-        {/* canvas interne */}
         <canvas ref={tinyRef} style={{ display: "none" }} />
         <footer className="text-xs text-neutral-500 text-center pt-4">
-          Les codes affichés sont les <b>BrickLink Color IDs</b> estimés par proximité colorimétrique.
+          Si le PDF ne s’ouvre pas, ajoute jsPDF via <code>npm i jspdf</code> ou un CDN (voir ci-dessous).
         </footer>
       </div>
     </div>

@@ -151,6 +151,68 @@ const nearestIdx = ([r, g, b], pal) => {
   return idx;
 };
 
+/* Ajustements image */
+function applyBrightnessContrast(data, brightPct, contrastPct) {
+  const B = clamp(brightPct, -100, 100) / 100 * 255; // -255..+255
+  const C = clamp(contrastPct, -100, 100);
+  const f = (259 * (C + 255)) / (255 * (259 - C)); // contraste
+  for (let i = 0; i < data.length; i += 4) {
+    let r = data[i] + B, g = data[i + 1] + B, b = data[i + 2] + B;
+    r = clamp(f * (r - 128) + 128, 0, 255);
+    g = clamp(f * (g - 128) + 128, 0, 255);
+    b = clamp(f * (b - 128) + 128, 0, 255);
+    data[i] = r; data[i + 1] = g; data[i + 2] = b;
+  }
+}
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+      default: h = 0;
+    }
+    h /= 6;
+  }
+  return [h, s, l];
+}
+function hslToRgb(h, s, l) {
+  const hue2rgb = (p, q, t) => {
+    if (t < 0) t += 1; if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  };
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+function applySaturation(data, satPct) {
+  const sDelta = clamp(satPct, -100, 100) / 100;
+  if (sDelta === 0) return;
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i], g = data[i + 1], b = data[i + 2];
+    let [h, s, l] = rgbToHsl(r, g, b);
+    s = clamp(s + sDelta * (sDelta > 0 ? 1 - s : s), 0, 1);
+    const [nr, ng, nb] = hslToRgb(h, s, l);
+    data[i] = nr; data[i + 1] = ng; data[i + 2] = nb;
+  }
+}
+
 /* corrélation fournisseur → BrickLink : renvoie [label, rgb, codeBL, isTrans, meta] */
 function correlateSupplierToBL(listSupplier, listBL) {
   const bl = listBL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]);
@@ -199,6 +261,11 @@ export default function App() {
   const [offX, setOffX] = useState(0);
   const [offY, setOffY] = useState(0);
 
+  // Ajustements
+  const [bright, setBright] = useState(0);     // -100 .. 100
+  const [contrast, setContrast] = useState(0); // -100 .. 100
+  const [saturation, setSaturation] = useState(0); // -100 .. 100
+
   // Palette
   const [useSupplier, setUseSupplier] = useState(true);  // par défaut : toutes tes couleurs
   const [inclTrans, setInclTrans] = useState(true);
@@ -212,6 +279,7 @@ export default function App() {
   const mosaicRef = useRef(null);
   const tinyRef = useRef(null);
   const [counts, setCounts] = useState([]);
+  const totalPieces = W * H;
 
   // charger fichiers
   useEffect(() => {
@@ -240,10 +308,14 @@ export default function App() {
   function process(img) {
     const tiny = tinyRef.current, mosaic = mosaicRef.current;
     drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
+
+    // récupère pixels et applique les ajustements
     const id = tiny.getContext("2d").getImageData(0, 0, W, H);
     const data = id.data;
+    applyBrightnessContrast(data, bright, contrast);
+    applySaturation(data, saturation);
 
-    // quantification
+    // quantification vers la palette
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
       const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
@@ -297,7 +369,11 @@ export default function App() {
   useEffect(() => {
     if (images[idxImg]) process(images[idxImg]);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, secCols, secRows, showSectionGrid]);
+  }, [
+    images, idxImg, W, H, zoom, offX, offY,
+    useSupplier, inclTrans, secCols, secRows, showSectionGrid,
+    bright, contrast, saturation
+  ]);
 
   /* ============================= Exports ============================= */
   async function exportPNG() {
@@ -325,6 +401,44 @@ export default function App() {
       return `[${p[2] ?? "?"}] ${name};${qty}`;
     });
     await saveFile(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${W}x${H}.csv`);
+  }
+
+  // Aide : dessiner légende multi-colonnes au bas de la page (ou nouvelle page si trop grand)
+  function drawLegendAtBottom(doc, countsList, paletteRef, m = 10) {
+    const Wp = doc.internal.pageSize.getWidth();
+    const Hp = doc.internal.pageSize.getHeight();
+    const title = "Légende (codes BrickLink) et quantités";
+    const rowH = 6, sw = 5; // taille swatch
+    const cols = 2;                       // 2 colonnes lisibles
+    const colW = (Wp - 2 * m) / cols;
+    const rows = Math.ceil(countsList.length / cols);
+    const legendH = rows * rowH + 8;      // + titre
+
+    let y0 = Hp - m - legendH;
+    if (y0 < m + 10) {                     // pas assez de place -> nouvelle page
+      doc.addPage();
+      y0 = m + 4;
+    }
+    doc.setFontSize(12);
+    doc.text(title, Wp / 2, y0, { align: "center" });
+    let y = y0 + 4;
+    doc.setFontSize(10);
+
+    for (let i = 0; i < countsList.length; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = m + col * colW;
+      const yy = y + row * rowH;
+
+      const [name, qty] = countsList[i];
+      const entry = paletteRef.find((p) => p[0] === name) || [];
+      const rgb = entry[1] || [200, 200, 200];
+      const code = entry[2] || "?";
+
+      doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+      doc.rect(x, yy - 4, sw, sw, "F"); doc.setDrawColor(0); doc.rect(x, yy - 4, sw, sw);
+      doc.text(`[${code}] ${name}: ${qty}`, x + sw + 3, yy);
+    }
   }
 
   // PDF A3 : AVEC NUMÉROS (plots + sections)
@@ -378,19 +492,8 @@ export default function App() {
     doc.setDrawColor(120); doc.setLineWidth(0.5);
     for (let c = 1; c < secCols; c++) { const x = ox + c * sW * cell; doc.line(x, oy, x, oy + cell * Gy); }
     for (let r = 1; r < secRows; r++) { const y = oy + r * sH * cell; doc.line(ox, y, ox + cell * Gx, y); }
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(Math.max(14, cell * Math.min(sW, sH) * 0.35));
-    let n = 1;
-    for (let r = 0; r < secRows; r++) {
-      for (let c = 0; c < secCols; c++) {
-        const cx = ox + (c * sW + sW / 2) * cell;
-        const cy = oy + (r * sH + sH / 2) * cell;
-        doc.text(String(n), cx, cy, { align: "center", baseline: "middle" });
-        n++;
-      }
-    }
 
-    // Légende / quantités à droite
+    // Légende & quantités à droite
     let lx = ox + cell * Gx + 8, ly = 22; const box = 6;
     doc.setTextColor(0, 0, 0); doc.setFontSize(12); doc.text("Légende & Quantités", lx, ly); ly += 6;
     counts.forEach(([name, qty]) => {
@@ -405,7 +508,7 @@ export default function App() {
     doc.save(`print_A3_${W}x${H}.pdf`);
   }
 
-  // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section)
+  // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section) + LÉGENDE en bas de la dernière page
   async function exportPDF_Sections() {
     const JsPDF = await getJsPDF();
     if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
@@ -444,6 +547,10 @@ export default function App() {
 
       n++;
     }
+
+    // === LÉGENDE en bas de la dernière page (couleurs + codes + quantités) ===
+    drawLegendAtBottom(doc, counts, palette, 10);
+
     doc.save(`sections_${secCols}x${secRows}_${W}x${H}.pdf`);
   }
 
@@ -453,7 +560,7 @@ export default function App() {
       <div className="max-w-7xl mx-auto space-y-6">
         <header className="flex items-center justify-between">
           <h1 className="text-2xl font-bold">BrickMosaic Pro — Aperçu propre, numéros uniquement en PDF</h1>
-          <div className="text-xs opacity-70">W×H indépendants · palette fournisseur 01→99 + BrickLink · PNG/CSV/PDF</div>
+          <div className="text-xs opacity-70">W×H indépendants · palette fournisseur 01→99 + BrickLink · Ajustements · PNG/CSV/PDF</div>
         </header>
 
         <div className="grid lg:grid-cols-3 gap-4">
@@ -476,14 +583,18 @@ export default function App() {
             </div>
 
             <div className="space-y-2">
-              <label className="block text-sm font-medium">2) Grille (colonnes × lignes) : {W} × {H}</label>
+              <label className="block text-sm font-medium">2) Grille (colonnes × lignes)</label>
               <div className="grid grid-cols-2 gap-2">
-                <div><span className="text-xs">Largeur</span>
+                <div><span className="text-xs">Largeur : {W}</span>
                   <input type="range" min={24} max={128} step={1} value={W} onChange={(e) => setW(parseInt(e.target.value, 10))} className="w-full" />
                 </div>
-                <div><span className="text-xs">Hauteur</span>
+                <div><span className="text-xs">Hauteur : {H}</span>
                   <input type="range" min={24} max={128} step={1} value={H} onChange={(e) => setH(parseInt(e.target.value, 10))} className="w-full" />
                 </div>
+              </div>
+              <div className="text-sm mt-1">
+                <strong>Total pièces :</strong> {totalPieces.toLocaleString("fr-FR")}
+                {counts.length > 0 && <> — <strong>Couleurs utilisées :</strong> {counts.length}</>}
               </div>
             </div>
 
@@ -530,13 +641,26 @@ export default function App() {
               </div>
             </div>
 
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">6) Ajustements d’image</label>
+              <div><span className="text-xs">Lumière : {bright}</span>
+                <input type="range" min={-100} max={100} step={1} value={bright} onChange={(e) => setBright(parseInt(e.target.value, 10))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Contraste : {contrast}</span>
+                <input type="range" min={-100} max={100} step={1} value={contrast} onChange={(e) => setContrast(parseInt(e.target.value, 10))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Saturation : {saturation}</span>
+                <input type="range" min={-100} max={100} step={1} value={saturation} onChange={(e) => setSaturation(parseInt(e.target.value, 10))} className="w-full" />
+              </div>
+            </div>
+
             <div className="pt-2 border-t space-y-2">
               <button className="w-full bg-black text-white rounded-xl py-2" onClick={() => images[idxImg] && process(images[idxImg])} disabled={!images.length}>Générer l’aperçu</button>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG (sans numéros)</button>
                 <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (codes + pièces)</button>
-                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (avec numéros)</button>
-                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (avec numéros)</button>
+                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (numéros + légende)</button>
+                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (numéros + légende en bas)</button>
               </div>
             </div>
           </div>
@@ -572,7 +696,7 @@ export default function App() {
 
         <canvas ref={tinyRef} style={{ display: "none" }} />
         <footer className="text-xs text-neutral-500 text-center pt-4">
-          Les numéros figurent uniquement dans les exports PDF (plots et sections).
+          Aperçu sans numéros. Les numéros et la légende apparaissent dans les PDF.
         </footer>
       </div>
     </div>

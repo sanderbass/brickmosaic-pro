@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 /* ========= utilitaires de téléchargement (robustes) ========= */
 async function saveFile(dataOrUrl, filename) {
   try {
-    const mod = await import("file-saver"); // dynamique si dispo
+    const mod = await import("file-saver"); // chargé dynamiquement si dispo
     const saveAs = mod.saveAs || mod.default;
     return saveAs(dataOrUrl, filename);
   } catch {
@@ -23,7 +23,7 @@ async function getJsPDF() {
     const m = await import("jspdf");
     return m.jsPDF || m.default;
   } catch {
-    return window.jspdf?.jsPDF || null;
+    return window.jspdf?.jsPDF || null; // si tu ajoutes le CDN dans index.html
   }
 }
 
@@ -206,7 +206,7 @@ export default function App() {
   // Sections (aperçu : lignes seulement, pas de numéros)
   const [secCols, setSecCols] = useState(3);
   const [secRows, setSecRows] = useState(4);
-  const [showSectionGrid, setShowSectionGrid] = useState(false); // pour un aperçu propre
+  const [showSectionGrid, setShowSectionGrid] = useState(true);
 
   // Refs & comptage
   const mosaicRef = useRef(null);
@@ -330,19 +330,17 @@ export default function App() {
   // PDF A3 : AVEC NUMÉROS (plots + sections)
   async function exportPDF_A3() {
     const JsPDF = await getJsPDF();
-    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN."); return; }
+    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
 
     const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a3" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight(), m = 12;
     doc.setFontSize(18);
     doc.text(`Brick Mosaic ${W}×${H} — ${useSupplier ? "Supplier" : "BrickLink"} ${inclTrans ? "(+Trans)" : "(Opaque)"}`, Wp / 2, 12, { align: "center" });
 
-    // Redessine un rendu haute qualité pour la pose des numéros dans le PDF
     const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
     const id = tiny.getContext("2d").getImageData(0, 0, Gx, Gy);
     const data = id.data;
 
-    // Zone d'image
     const aspect = Gx / Gy;
     const maxW = Wp - m * 2 - 60, maxH = Hp - m * 2 - 14;
     let drawW = maxW, drawH = drawW / aspect;
@@ -350,11 +348,9 @@ export default function App() {
     const cell = Math.min(drawW / Gx, drawH / Gy);
     const ox = m, oy = 18;
 
-    // Fond blanc
     doc.setFillColor(255, 255, 255);
     doc.rect(ox, oy, cell * Gx, cell * Gy, "F");
 
-    // Dessin des plots + numéros
     for (let y = 0; y < Gy; y++) {
       for (let x = 0; x < Gx; x++) {
         const i = (y * Gx + x) * 4;
@@ -362,8 +358,7 @@ export default function App() {
         const [, rgb, code] = palette[j];
 
         const px = ox + x * cell, py = oy + y * cell, rad = (cell * 0.76) / 2;
-        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-        doc.setDrawColor(20);
+        doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.setDrawColor(20);
         doc.circle(px + cell / 2, py + cell / 2, rad, "FD");
 
         const lum = luminance(...rgb);
@@ -413,7 +408,7 @@ export default function App() {
   // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section)
   async function exportPDF_Sections() {
     const JsPDF = await getJsPDF();
-    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN."); return; }
+    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
 
     const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
     const sW = Math.floor(Gx / secCols) || Gx, sH = Math.floor(Gy / secRows) || Gy;

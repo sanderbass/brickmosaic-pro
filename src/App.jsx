@@ -1,31 +1,24 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ==== utilitaires de téléchargement (robustes, sans dépendances obligatoires) ==== */
+/* ========= utilitaires de téléchargement (robustes) ========= */
 async function saveFile(dataOrUrl, filename) {
-  // Essaie file-saver si dispo ; sinon fallback <a download>
   try {
-    const mod = await import("file-saver"); // dynamique
+    const mod = await import("file-saver"); // dynamique si dispo
     const saveAs = mod.saveAs || mod.default;
     return saveAs(dataOrUrl, filename);
   } catch {
-    const url =
-      typeof dataOrUrl === "string"
-        ? dataOrUrl
-        : URL.createObjectURL(dataOrUrl);
+    const url = typeof dataOrUrl === "string" ? dataOrUrl : URL.createObjectURL(dataOrUrl);
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
-    if (typeof dataOrUrl !== "string") {
-      setTimeout(() => URL.revokeObjectURL(url), 1500);
-    }
+    if (typeof dataOrUrl !== "string") setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 }
 
 async function getJsPDF() {
-  // Charge jsPDF dynamiquement ; sinon essaie window.jspdf (CDN).
   try {
     const m = await import("jspdf");
     return m.jsPDF || m.default;
@@ -34,10 +27,8 @@ async function getJsPDF() {
   }
 }
 
-/* -----------------------------------------------------------
-   BRICKLINK – palette de référence pour corréler les couleurs
-   (Codes = BrickLink Color IDs ; hex ≈ approximations réalistes)
-   ----------------------------------------------------------- */
+/* ==================== Palettes couleurs ===================== */
+/* BrickLink – codes officiels (approx hex pour affichage) */
 const BL = [
   ["White", "#F2F3F2", 1, false],
   ["Black", "#000000", 26, false],
@@ -81,8 +72,7 @@ const BL = [
   ["Light Aqua", "#A7DCD6", 152, false],
   ["Coral", "#FF6F61", 353, false],
   ["Sand Red", "#A75D5E", 58, false],
-
-  // transparents
+  // Transparences
   ["Trans-Clear", "#E6F2F2", 12, true],
   ["Trans-Black", "#635F52", 251, true],
   ["Trans-Red", "#DE0000", 17, true],
@@ -102,82 +92,46 @@ const BL = [
   ["Trans-Brown", "#6F4E37", 13, true],
 ];
 
-/* -----------------------------------------------------------
-   PALETTE FOURNISSEUR KKBBRICKS (codes 01→99) – d’après tes planches
-   ----------------------------------------------------------- */
+/* Palette fournisseur KKBBRICKS (01→99) */
 const SUPPLIER = [
-  [1, "White", "#F2F3F2", false],
-  [2, "Very Light Gray", "#E6E6E6", false],
-  [3, "Light Gray", "#9BA19D", false],
-  [4, "Medium Gray", "#B7B7B7", false],
-  [5, "Dark Gray", "#6D6E5C", false],
-  [6, "Black", "#000000", false],
-  [7, "Light Bluish Gray", "#A3A2A4", false],
-  [8, "Dark Bluish Gray", "#6D6E5C", false],
-  [9, "Eggshell", "#F2E6D6", false],
-  [10, "Eggshell Pink", "#F7E1E8", false],
-  [11, "Light Nougat", "#F6D7B3", false],
-  [12, "Medium Tan", "#CBAE86", false],
-  [13, "Nougat", "#CC8E69", false],
-  [14, "Medium Nougat", "#AE7A59", false],
-  [15, "Flesh", "#D78E76", false],
-  [16, "Fabuland Brown", "#C56E2D", false],
-  [17, "Brown", "#6B3F20", false],
-  [18, "Dark Brown", "#4C2F27", false],
-  [19, "Tan", "#E4CD9E", false],
-  [20, "Dark Tan", "#958A73", false],
-  [21, "Light Yellow", "#FFF07A", false],
-  [22, "Yellow", "#F2CD37", false],
-  [23, "Dark Yellow", "#D5A021", false],
-  [24, "Medium Orange", "#F19F4D", false],
-  [25, "Orange", "#F08F1C", false],
-  [26, "Light Salmon", "#F6D5C9", false],
-  [27, "Pink", "#FFB5D1", false],
-  [28, "Dark Pink", "#DA70D6", false],
-  [29, "Magenta", "#A0006D", false],
-  [30, "Red", "#C91A09", false],
-  [31, "Dark Red", "#720E0F", false],
-  [32, "Sand Red", "#A75D5E", false],
-  [33, "Lavender", "#CDA4DE", false],
-  [34, "Medium Lavender", "#A06EBB", false],
-  [35, "Purple", "#6A0DAD", false],
-  [36, "Bright Light Blue", "#9BC4E2", false],
-  [37, "Medium Blue", "#6C9BD2", false],
-  [38, "Medium Azure", "#36A3E1", false],
-  [39, "Royal Blue", "#2C4DA7", false],
-  [40, "Dark Azure", "#0072A3", false],
-  [41, "Blue", "#0055BF", false],
-  [42, "Dark Blue", "#0B3B8F", false],
-  [43, "Sand Blue", "#6074A1", false],
-  [44, "Yellowish Green", "#C9D872", false],
-  [45, "Lime", "#A6CA3A", false],
-  [46, "Olive Green", "#808E42", false],
-  [47, "Sand Green", "#A3C3A2", false],
-  [48, "Dark Turquoise", "#008A8A", false],
-  [49, "Bright Green", "#4B9F4A", false],
-  [50, "Green", "#237841", false],
-  [51, "Dark Green", "#184632", false],
-  [52, "Military Green", "#5A6B54", false],
-  [53, "Light Aqua", "#A7DCD6", false],
-  [54, "Coral", "#FF6F61", false],
-  [85, "Trans-Black", "#635F52", true],
-  [86, "Trans-Brown", "#6F4E37", true],
-  [87, "Trans-Purple", "#5F2683", true],
-  [88, "Trans-Dark Pink", "#C94A83", true],
-  [89, "Trans-Pink", "#DF6695", true],
-  [90, "Trans-Neon Orange", "#FF800D", true],
-  [91, "Trans-Orange", "#F08F1C", true],
-  [92, "Trans-Neon Green", "#C0FF00", true],
-  [93, "Trans-Green", "#5AC35E", true],
-  [94, "Trans-Blue", "#0094FF", true],
-  [95, "Trans-Light Blue", "#A3D2F2", true],
-  [96, "Trans-Red", "#DE0000", true],
-  [97, "Trans-Yellow", "#F5CD2A", true],
-  [98, "Trans-Clear", "#E6F2F2", true],
+  [1, "White", "#F2F3F2", false], [2, "Very Light Gray", "#E6E6E6", false],
+  [3, "Light Gray", "#9BA19D", false], [4, "Medium Gray", "#B7B7B7", false],
+  [5, "Dark Gray", "#6D6E5C", false], [6, "Black", "#000000", false],
+  [7, "Light Bluish Gray", "#A3A2A4", false], [8, "Dark Bluish Gray", "#6D6E5C", false],
+  [9, "Eggshell", "#F2E6D6", false], [10, "Eggshell Pink", "#F7E1E8", false],
+  [11, "Light Nougat", "#F6D7B3", false], [12, "Medium Tan", "#CBAE86", false],
+  [13, "Nougat", "#CC8E69", false], [14, "Medium Nougat", "#AE7A59", false],
+  [15, "Flesh", "#D78E76", false], [16, "Fabuland Brown", "#C56E2D", false],
+  [17, "Brown", "#6B3F20", false], [18, "Dark Brown", "#4C2F27", false],
+  [19, "Tan", "#E4CD9E", false], [20, "Dark Tan", "#958A73", false],
+  [21, "Light Yellow", "#FFF07A", false], [22, "Yellow", "#F2CD37", false],
+  [23, "Dark Yellow", "#D5A021", false], [24, "Medium Orange", "#F19F4D", false],
+  [25, "Orange", "#F08F1C", false], [26, "Light Salmon", "#F6D5C9", false],
+  [27, "Pink", "#FFB5D1", false], [28, "Dark Pink", "#DA70D6", false],
+  [29, "Magenta", "#A0006D", false], [30, "Red", "#C91A09", false],
+  [31, "Dark Red", "#720E0F", false], [32, "Sand Red", "#A75D5E", false],
+  [33, "Lavender", "#CDA4DE", false], [34, "Medium Lavender", "#A06EBB", false],
+  [35, "Purple", "#6A0DAD", false], [36, "Bright Light Blue", "#9BC4E2", false],
+  [37, "Medium Blue", "#6C9BD2", false], [38, "Medium Azure", "#36A3E1", false],
+  [39, "Royal Blue", "#2C4DA7", false], [40, "Dark Azure", "#0072A3", false],
+  [41, "Blue", "#0055BF", false], [42, "Dark Blue", "#0B3B8F", false],
+  [43, "Sand Blue", "#6074A1", false], [44, "Yellowish Green", "#C9D872", false],
+  [45, "Lime", "#A6CA3A", false], [46, "Olive Green", "#808E42", false],
+  [47, "Sand Green", "#A3C3A2", false], [48, "Dark Turquoise", "#008A8A", false],
+  [49, "Bright Green", "#4B9F4A", false], [50, "Green", "#237841", false],
+  [51, "Dark Green", "#184632", false], [52, "Military Green", "#5A6B54", false],
+  [53, "Light Aqua", "#A7DCD6", false], [54, "Coral", "#FF6F61", false],
+  [85, "Trans-Black", "#635F52", true], [86, "Trans-Brown", "#6F4E37", true],
+  [87, "Trans-Purple", "#5F2683", true], [88, "Trans-Dark Pink", "#C94A83", true],
+  [89, "Trans-Pink", "#DF6695", true], [90, "Trans-Neon Orange", "#FF800D", true],
+  [91, "Trans-Orange", "#F08F1C", true], [92, "Trans-Neon Green", "#C0FF00", true],
+  [93, "Trans-Green", "#5AC35E", true], [94, "Trans-Blue", "#0094FF", true],
+  [95, "Trans-Light Blue", "#A3D2F2", true], [96, "Trans-Red", "#DE0000", true],
+  [97, "Trans-Yellow", "#F5CD2A", true], [98, "Trans-Clear", "#E6F2F2", true],
   [99, "Trans-Medium Blue", "#6EC1E4", true],
 ];
 
-/* ========== helpers couleur & corrélation ========== */
+/* ========================= helpers ========================= */
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const sqr = (x) => x * x;
 const hexToRgb = (h) => {
@@ -197,22 +151,24 @@ const nearestIdx = ([r, g, b], pal) => {
   return idx;
 };
 
+/* corrélation fournisseur → BrickLink : renvoie [label, rgb, codeBL, isTrans, meta] */
 function correlateSupplierToBL(listSupplier, listBL) {
   const bl = listBL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]);
   return listSupplier.map(([supCode, name, hex, isTrans]) => {
     const rgb = hexToRgb(hex);
     const j = nearestIdx(rgb, bl);
-    const [blName, blRgb, blCode, blTrans] = bl[j];
+    const [blName, , blCode, blTrans] = bl[j];
     return [
       `${name} (#${String(supCode).padStart(2, "0")})`,
       rgb,
-      blCode,                      // code BrickLink estimé
+      blCode,
       isTrans || blTrans,
       { supplierCode: supCode, supplierName: name, blName, blCode },
     ];
   });
 }
 
+/* draw crop -> canvas W×H */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   const ctx = target.getContext("2d", { willReadFrequently: true });
   target.width = gridW; target.height = gridH;
@@ -227,30 +183,37 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW, gridH);
 }
 
-/* ===================== APP ===================== */
+/* ============================ App =========================== */
 export default function App() {
+  // Images
   const [files, setFiles] = useState([]);
   const [images, setImages] = useState([]);
   const [idxImg, setIdxImg] = useState(0);
 
+  // Grille
   const [W, setW] = useState(48);
   const [H, setH] = useState(64);
 
+  // Cadrage
   const [zoom, setZoom] = useState(1.15);
   const [offX, setOffX] = useState(0);
   const [offY, setOffY] = useState(0);
 
-  const [useSupplier, setUseSupplier] = useState(true);
+  // Palette
+  const [useSupplier, setUseSupplier] = useState(true);  // par défaut : toutes tes couleurs
   const [inclTrans, setInclTrans] = useState(true);
 
-  const [showNumbers, setShowNumbers] = useState(true);
+  // Sections (aperçu : lignes seulement, pas de numéros)
   const [secCols, setSecCols] = useState(3);
   const [secRows, setSecRows] = useState(4);
+  const [showSectionGrid, setShowSectionGrid] = useState(false); // pour un aperçu propre
 
+  // Refs & comptage
   const mosaicRef = useRef(null);
   const tinyRef = useRef(null);
   const [counts, setCounts] = useState([]);
 
+  // charger fichiers
   useEffect(() => {
     if (!files.length) { setImages([]); return; }
     let cancel = false;
@@ -265,6 +228,7 @@ export default function App() {
     return () => { cancel = true; };
   }, [files]);
 
+  // Palettes prêtes
   const PAL_SUPPLIER = useMemo(() => correlateSupplierToBL(SUPPLIER, BL), []);
   const PAL_BL = useMemo(() => BL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]), []);
   const palette = useMemo(() => {
@@ -272,12 +236,14 @@ export default function App() {
     return src.filter((p) => (inclTrans ? true : !p[3]));
   }, [useSupplier, inclTrans, PAL_SUPPLIER, PAL_BL]);
 
+  // Rendu aperçu (aucun numéro)
   function process(img) {
     const tiny = tinyRef.current, mosaic = mosaicRef.current;
     drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
     const id = tiny.getContext("2d").getImageData(0, 0, W, H);
     const data = id.data;
 
+    // quantification
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
       const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
@@ -286,6 +252,7 @@ export default function App() {
     }
     tiny.getContext("2d").putImageData(id, 0, 0);
 
+    // comptage
     const cts = new Map();
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
@@ -295,6 +262,7 @@ export default function App() {
     }
     setCounts([...cts.entries()].sort((a, b) => b[1] - a[1]));
 
+    // dessin
     const cell = 14;
     mosaic.width = W * cell; mosaic.height = H * cell;
     const g = mosaic.getContext("2d"); g.clearRect(0, 0, mosaic.width, mosaic.height);
@@ -302,48 +270,41 @@ export default function App() {
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
       const i = (y * W + x) * 4;
       const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-      const [name, rgb, code] = palette[j];
+      const [, rgb] = palette[j];
       const cx = x * cell, cy = y * cell;
       const pad = Math.max(1, Math.floor(cell * 0.12)), rad = (cell - pad * 2) / 2;
       g.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
       g.strokeStyle = "#111"; g.lineWidth = Math.max(1, Math.floor(cell * 0.06));
       g.beginPath(); g.arc(cx + cell / 2, cy + cell / 2, rad, 0, Math.PI * 2); g.fill(); g.stroke();
-      if (showNumbers) {
-        const lum = luminance(...rgb);
-        g.font = `bold ${Math.floor(cell * 0.55)}px system-ui, Segoe UI, Roboto`;
-        g.textAlign = "center"; g.textBaseline = "middle";
-        g.lineWidth = 3; g.strokeStyle = lum < 0.5 ? "rgba(255,255,255,0.9)" : "rgba(20,20,20,0.9)";
-        g.fillStyle = "#000"; g.strokeText(String(code), cx + cell / 2, cy + cell / 2); g.fillText(String(code), cx + cell / 2, cy + cell / 2);
-      }
+      // *** pas de numéros dans l’aperçu ***
     }
 
+    // grille de la mosaïque
     g.strokeStyle = "rgba(0,0,0,0.18)"; g.lineWidth = 1;
     for (let i = 0; i <= W; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, H * cell); g.stroke(); }
     for (let j = 0; j <= H; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(W * cell, j * cell); g.stroke(); }
 
-    if (secCols > 0 && secRows > 0) {
+    // sections (lignes seulement si activé)
+    if (showSectionGrid && secCols > 0 && secRows > 0) {
       const sW = Math.floor(W / secCols), sH = Math.floor(H / secRows);
       g.strokeStyle = "#ddd"; g.lineWidth = 4;
       for (let c = 1; c < secCols; c++) { const x = c * sW * cell; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H * cell); g.stroke(); }
       for (let r = 1; r < secRows; r++) { const y = r * sH * cell; g.beginPath(); g.moveTo(0, y); g.lineTo(W * cell, y); g.stroke(); }
-      let n = 1; g.fillStyle = "rgba(255,255,255,0.85)"; g.strokeStyle = "rgba(0,0,0,0.3)";
-      for (let r = 0; r < secRows; r++) for (let c = 0; c < secCols; c++) {
-        const ox = (c * sW + sW / 2) * cell, oy = (r * sH + sH / 2) * cell;
-        g.font = `bold ${Math.floor(cell * Math.min(sW, sH) * 0.35)}px system-ui`;
-        g.textAlign = "center"; g.textBaseline = "middle"; g.strokeText(String(n), ox, oy); g.fillText(String(n), ox, oy); n++;
-      }
+      // *** pas de numéros de sections à l’écran ***
     }
   }
 
-  useEffect(() => { if (images[idxImg]) process(images[idxImg]); /* eslint-disable-next-line */ }, [
-    images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, showNumbers, secCols, secRows
-  ]);
+  useEffect(() => {
+    if (images[idxImg]) process(images[idxImg]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, secCols, secRows, showSectionGrid]);
 
-  /* ==== Exports ==== */
+  /* ============================= Exports ============================= */
   async function exportPNG() {
     const url = mosaicRef.current.toDataURL("image/png");
     await saveFile(url, `mosaic_${W}x${H}_${useSupplier ? "supplier" : "BL"}_${inclTrans ? "withTrans" : "opaque"}.png`);
   }
+
   async function exportCSV() {
     const tiny = tinyRef.current, ctx = tiny.getContext("2d");
     const id = ctx.getImageData(0, 0, tiny.width, tiny.height), data = id.data;
@@ -365,36 +326,98 @@ export default function App() {
     });
     await saveFile(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${W}x${H}.csv`);
   }
+
+  // PDF A3 : AVEC NUMÉROS (plots + sections)
   async function exportPDF_A3() {
     const JsPDF = await getJsPDF();
-    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou active le CDN."); return; }
+    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN."); return; }
+
     const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a3" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight(), m = 12;
     doc.setFontSize(18);
     doc.text(`Brick Mosaic ${W}×${H} — ${useSupplier ? "Supplier" : "BrickLink"} ${inclTrans ? "(+Trans)" : "(Opaque)"}`, Wp / 2, 12, { align: "center" });
-    const aspect = mosaicRef.current.width / mosaicRef.current.height;
-    const maxW = Wp - m * 2 - 50, maxH = Hp - m * 2 - 12;
+
+    // Redessine un rendu haute qualité pour la pose des numéros dans le PDF
+    const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
+    const id = tiny.getContext("2d").getImageData(0, 0, Gx, Gy);
+    const data = id.data;
+
+    // Zone d'image
+    const aspect = Gx / Gy;
+    const maxW = Wp - m * 2 - 60, maxH = Hp - m * 2 - 14;
     let drawW = maxW, drawH = drawW / aspect;
     if (drawH > maxH) { drawH = maxH; drawW = drawH * aspect; }
-    const dataUrl = mosaicRef.current.toDataURL("image/png");
-    doc.addImage(dataUrl, "PNG", m, 18, drawW, drawH);
+    const cell = Math.min(drawW / Gx, drawH / Gy);
+    const ox = m, oy = 18;
 
-    let x = m + drawW + 8, y = 24; const box = 6;
-    doc.setFontSize(12); doc.text("Légende & Quantités", x, y); y += 6;
+    // Fond blanc
+    doc.setFillColor(255, 255, 255);
+    doc.rect(ox, oy, cell * Gx, cell * Gy, "F");
+
+    // Dessin des plots + numéros
+    for (let y = 0; y < Gy; y++) {
+      for (let x = 0; x < Gx; x++) {
+        const i = (y * Gx + x) * 4;
+        const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
+        const [, rgb, code] = palette[j];
+
+        const px = ox + x * cell, py = oy + y * cell, rad = (cell * 0.76) / 2;
+        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+        doc.setDrawColor(20);
+        doc.circle(px + cell / 2, py + cell / 2, rad, "FD");
+
+        const lum = luminance(...rgb);
+        doc.setTextColor(lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0);
+        doc.setFontSize(Math.max(6, cell * 0.55));
+        doc.text(String(code), px + cell / 2, py + cell / 2, { align: "center", baseline: "middle" });
+      }
+    }
+
+    // Grille fine
+    doc.setDrawColor(190); doc.setLineWidth(0.1);
+    for (let i = 0; i <= Gx; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + cell * Gy); }
+    for (let j = 0; j <= Gy; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * Gx, y); }
+
+    // Sections + numéros de sections
+    const sW = Math.floor(Gx / secCols) || Gx, sH = Math.floor(Gy / secRows) || Gy;
+    doc.setDrawColor(120); doc.setLineWidth(0.5);
+    for (let c = 1; c < secCols; c++) { const x = ox + c * sW * cell; doc.line(x, oy, x, oy + cell * Gy); }
+    for (let r = 1; r < secRows; r++) { const y = oy + r * sH * cell; doc.line(ox, y, ox + cell * Gx, y); }
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(Math.max(14, cell * Math.min(sW, sH) * 0.35));
+    let n = 1;
+    for (let r = 0; r < secRows; r++) {
+      for (let c = 0; c < secCols; c++) {
+        const cx = ox + (c * sW + sW / 2) * cell;
+        const cy = oy + (r * sH + sH / 2) * cell;
+        doc.text(String(n), cx, cy, { align: "center", baseline: "middle" });
+        n++;
+      }
+    }
+
+    // Légende / quantités à droite
+    let lx = ox + cell * Gx + 8, ly = 22; const box = 6;
+    doc.setTextColor(0, 0, 0); doc.setFontSize(12); doc.text("Légende & Quantités", lx, ly); ly += 6;
     counts.forEach(([name, qty]) => {
       const entry = palette.find((p) => p[0] === name) || [];
       const rgb = entry[1] || [200, 200, 200], code = entry[2] || "?";
-      doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(x, y, box, box, "F"); doc.setDrawColor(0); doc.rect(x, y, box, box);
-      doc.text(`[${code}] ${name}: ${qty}`, x + box + 3, y + 4); y += box + 3;
-      if (y > Hp - m) { doc.addPage(); y = m; }
+      doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(lx, ly, box, box, "F"); doc.setDrawColor(0); doc.rect(lx, ly, box, box);
+      doc.text(`[${code}] ${name}: ${qty}`, lx + box + 3, ly + 4);
+      ly += box + 3;
+      if (ly > Hp - 14) { doc.addPage(); lx = m; ly = 14; }
     });
+
     doc.save(`print_A3_${W}x${H}.pdf`);
   }
+
+  // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section)
   async function exportPDF_Sections() {
     const JsPDF = await getJsPDF();
-    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou active le CDN."); return; }
+    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN."); return; }
+
     const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
-    const sW = Math.floor(Gx / secCols), sH = Math.floor(Gy / secRows);
+    const sW = Math.floor(Gx / secCols) || Gx, sH = Math.floor(Gy / secRows) || Gy;
+
     const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight();
     const m = 10, uW = Wp - 2 * m, uH = Hp - 2 * m - 10, cell = Math.min(uW / sW, uH / sH);
@@ -403,38 +426,43 @@ export default function App() {
     let n = 1, first = true;
     for (let r = 0; r < secRows; r++) for (let c = 0; c < secCols; c++) {
       if (!first) doc.addPage(); first = false;
+
       const title = `Section ${n}`; doc.setFontSize(16); doc.text(title, Wp / 2, 10, { align: "center" });
+
       const boardW = sW * cell, boardH = sH * cell, ox = m + (uW - boardW) / 2, oy = m + 10 + (uH - boardH) / 2;
 
       for (let y = 0; y < sH; y++) for (let x = 0; x < sW; x++) {
         const gx = c * sW + x, gy = r * sH + y; if (gx >= Gx || gy >= Gy) continue;
         const i = (gy * Gx + gx) * 4, j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-        const [, rgb, code] = palette[j]; const px = ox + x * cell, py = oy + y * cell, rad = (cell * 0.76) / 2;
+        const [, rgb, code] = palette[j];
+        const px = ox + x * cell, py = oy + y * cell, rad = (cell * 0.76) / 2;
         doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.setDrawColor(0); doc.circle(px + cell / 2, py + cell / 2, rad, "FD");
         const lum = luminance(...rgb); doc.setTextColor(lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0);
-        doc.setFontSize(Math.max(6, cell * 0.55));
-        doc.text(String(code), px + cell / 2, py + cell / 2, { align: "center", baseline: "middle" });
+        doc.setFontSize(Math.max(6, cell * 0.55)); doc.text(String(code), px + cell / 2, py + cell / 2, { align: "center", baseline: "middle" });
       }
 
+      // grille + cadre
       doc.setDrawColor(180); doc.setLineWidth(0.1);
       for (let i = 0; i <= sW; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + cell * sH); }
       for (let j = 0; j <= sH; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * sW, y); }
       doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox, oy, cell * sW, cell * sH);
+
       n++;
     }
     doc.save(`sections_${secCols}x${secRows}_${W}x${H}.pdf`);
   }
 
+  /* ============================== UI ============================== */
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
         <header className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">BrickMosaic Pro — Palette fournisseur + codes BrickLink</h1>
-          <div className="text-xs opacity-70">W×H indépendants · numéros · sections · PNG/CSV/PDF</div>
+          <h1 className="text-2xl font-bold">BrickMosaic Pro — Aperçu propre, numéros uniquement en PDF</h1>
+          <div className="text-xs opacity-70">W×H indépendants · palette fournisseur 01→99 + BrickLink · PNG/CSV/PDF</div>
         </header>
 
         <div className="grid lg:grid-cols-3 gap-4">
-          {/* réglages */}
+          {/* Réglages */}
           <div className="bg-white rounded-2xl shadow p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
@@ -453,7 +481,7 @@ export default function App() {
             </div>
 
             <div className="space-y-2">
-              <label className="block text-sm font-medium">2) Grille : {W} × {H}</label>
+              <label className="block text-sm font-medium">2) Grille (colonnes × lignes) : {W} × {H}</label>
               <div className="grid grid-cols-2 gap-2">
                 <div><span className="text-xs">Largeur</span>
                   <input type="range" min={24} max={128} step={1} value={W} onChange={(e) => setW(parseInt(e.target.value, 10))} className="w-full" />
@@ -483,10 +511,10 @@ export default function App() {
             </div>
 
             <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">4) Numérotation & sections</label>
+              <label className="text-sm font-medium">4) Sections (aperçu)</label>
               <div className="flex items-center gap-2">
-                <input id="nums" type="checkbox" checked={showNumbers} onChange={(e) => setShowNumbers(e.target.checked)} />
-                <label htmlFor="nums" className="text-sm">Afficher les codes BrickLink</label>
+                <input id="gridsec" type="checkbox" checked={showSectionGrid} onChange={(e) => setShowSectionGrid(e.target.checked)} />
+                <label htmlFor="gridsec" className="text-sm">Afficher les lignes de sections (sans numéros)</label>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="text-sm">Colonnes : <input type="number" min={1} className="border rounded px-2 py-1 w-20 ml-2" value={secCols} onChange={(e) => setSecCols(parseInt(e.target.value, 10) || 1)} /></label>
@@ -510,15 +538,15 @@ export default function App() {
             <div className="pt-2 border-t space-y-2">
               <button className="w-full bg-black text-white rounded-xl py-2" onClick={() => images[idxImg] && process(images[idxImg])} disabled={!images.length}>Générer l’aperçu</button>
               <div className="grid grid-cols-2 gap-2">
-                <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
-                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV</button>
-                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (aperçu + légende)</button>
-                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections ({secCols}×{secRows})</button>
+                <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG (sans numéros)</button>
+                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (codes + pièces)</button>
+                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (avec numéros)</button>
+                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (avec numéros)</button>
               </div>
             </div>
           </div>
 
-          {/* aperçu & palette */}
+          {/* Aperçu + palette */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
             <div className="overflow-auto w-full border rounded-xl">
               <canvas ref={mosaicRef} className="w-full h-auto" />
@@ -549,7 +577,7 @@ export default function App() {
 
         <canvas ref={tinyRef} style={{ display: "none" }} />
         <footer className="text-xs text-neutral-500 text-center pt-4">
-          Si le PDF ne s’ouvre pas, ajoute jsPDF via <code>npm i jspdf</code> ou un CDN (voir ci-dessous).
+          Les numéros figurent uniquement dans les exports PDF (plots et sections).
         </footer>
       </div>
     </div>

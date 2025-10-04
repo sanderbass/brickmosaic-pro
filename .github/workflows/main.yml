@@ -22,18 +22,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          # on laisse le cache npm, mais ça ne doit pas casser même sans lockfile
           cache: 'npm'
       - name: Sanity check
         run: |
           pwd && ls -la
           node -v && npm -v
           test -f package.json && echo "package.json OK" || (echo "package.json MANQUANT" && exit 1)
+      # 👉 remplace npm ci par npm install (pas besoin de package-lock.json)
       - run: npm install
       - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
+
   deploy:
     environment:
       name: github-pages

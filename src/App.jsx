@@ -62,6 +62,7 @@ const BL = [
   ["Trans-Dark Pink", "#C94A83", 50, true], ["Trans-Pink", "#DF6695", 107, true],
   ["Trans-Brown", "#6F4E37", 13, true],
 ];
+
 const SUPPLIER = [
   [1,"White","#F2F3F2",false],[2,"Very Light Gray","#E6E6E6",false],[3,"Light Gray","#9BA19D",false],[4,"Medium Gray","#B7B7B7",false],
   [5,"Dark Gray","#6D6E5C",false],[6,"Black","#000000",false],[7,"Light Bluish Gray","#A3A2A4",false],[8,"Dark Bluish Gray","#6D6E5C",false],
@@ -77,13 +78,14 @@ const SUPPLIER = [
   [45,"Lime","#A6CA3A",false],[46,"Olive Green","#808E42",false],[47,"Sand Green","#A3C3A2",false],[48,"Dark Turquoise","#008A8A",false],
   [49,"Bright Green","#4B9F4A",false],[50,"Green","#237841",false],[51,"Dark Green","#184632",false],[52,"Military Green","#5A6B54",false],
   [53,"Light Aqua","#A7DCD6",false],[54,"Coral","#FF6F61",false],
+  // Trans fournisseur
   [85,"Trans-Black","#635F52",true],[86,"Trans-Brown","#6F4E37",true],[87,"Trans-Purple","#5F2683",true],[88,"Trans-Dark Pink","#C94A83",true],
   [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F08F1C",true],[92,"Trans-Neon Green","#C0FF00",true],
   [93,"Trans-Green","#5AC35E",true],[94,"Trans-Blue","#0094FF",true],[95,"Trans-Light Blue","#A3D2F2",true],[96,"Trans-Red","#DE0000",true],
   [97,"Trans-Yellow","#F5CD2A",true],[98,"Trans-Clear","#E6F2F2",true],[99,"Trans-Medium Blue","#6EC1E4",true],
 ];
 
-/* map fournisseur → BL (pour codes) */
+/* map fournisseur → BL (pour codes et noms) */
 function correlateSupplierToBL(listSupplier, listBL) {
   const bl = listBL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]);
   return listSupplier.map(([supCode, name, hex, isTrans]) => {
@@ -239,7 +241,6 @@ function makeQuantWorker() {
       }
     }
 
-    // Pré-quantisation: on utilisera AR/AG/AB pour les contraintes de stock
     let AR=R, AG=G, AB=B;
 
     const cache = new Int16Array(4096); cache.fill(-1);
@@ -270,9 +271,8 @@ function makeQuantWorker() {
         indices[i]=j; counts[j]++;
       }
     } else {
-      // Floyd–Steinberg / Atkinson
       const r = new Float32Array(R), g = new Float32Array(G), b = new Float32Array(B);
-      AR=r; AG=g; AB=b; // pour contraintes plus tard
+      AR=r; AG=g; AB=b;
       const push = (x,y, fr,fg,fb, w)=>{
         if (x<0||y<0||x>=W||y>=H) return;
         const k=(y*W+x);
@@ -310,7 +310,7 @@ function makeQuantWorker() {
       }
     }
 
-    // Anti-singleton (après dithering)
+    // Anti-singleton
     if (opts.antiSingleton){
       const out = new Uint16Array(indices);
       const idx = (x,y)=> y*W+x;
@@ -331,24 +331,20 @@ function makeQuantWorker() {
           }
         }
       }
-      // recalc counts
       counts.fill(0); for(let i=0;i<N;i++){ counts[out[i]]++; }
-      // remplace indices
       indices.set(out);
     }
 
-    // Contraintes de stock (si fournies)
+    // Contraintes de stock
     let stockNote=null;
     if (Array.isArray(stocks)){
       const cap = new Int32Array(palLen);
       for(let i=0;i<palLen;i++){
-        cap[i] = (stocks[i]==null || stocks[i]<0) ? 2147483647 : stocks[i]|0; // illimité
+        cap[i] = (stocks[i]==null || stocks[i]<0) ? 2147483647 : stocks[i]|0;
       }
-      // liste des pixels par couleur
       const byColor = Array.from({length: palLen}, ()=>[]);
       for(let k=0;k<N;k++){ byColor[indices[k]].push(k); }
 
-      // déficits
       let unmet=0;
       const deficit = new Int32Array(palLen);
       for(let i=0;i<palLen;i++){
@@ -358,22 +354,18 @@ function makeQuantWorker() {
       }
 
       if (unmet>0){
-        // réassignations gourmandes
         function nearestAvail(r,g,b, forbid){
           const lab = rgb2lab(r,g,b);
           let best=-1, bd=1e18;
           for(let j=0;j<palLen;j++){
-            if (cap[j]-counts[j] <= (j===forbid?0:0)) {
-              if (j===forbid) continue; // éviter la même couleur si elle manque
-              if (cap[j]-counts[j] <= 0) continue; // pas de capacité
-            }
+            if (j===forbid) continue;
+            if (cap[j]-counts[j] <= 0) continue;
             const L=palLAB[j][0]-lab[0], A=palLAB[j][1]-lab[1], Bv=palLAB[j][2]-lab[2];
             const d=L*L+A*A+Bv*Bv;
             if (d<bd){bd=d; best=j;}
           }
           return best;
         }
-
         for(let i=0;i<palLen;i++){
           let need = deficit[i];
           if (need<=0) continue;
@@ -384,30 +376,19 @@ function makeQuantWorker() {
             const rr=AR[k], gg=AG[k], bb=AB[k];
             const j = nearestAvail(rr,gg,bb, i);
             if (j>=0 && (cap[j]-counts[j])>0){
-              // réassigner
               counts[i]--; counts[j]++;
               indices[k]=j;
               need--;
-            } else {
-              // pas trouvé d'alternative pour ce pixel
             }
           }
-          if (need>0){
-            // Impossible de satisfaire complètement
-            unmet += need;
-          }
+          if (need>0){ unmet += need; }
         }
-        if (unmet>0){
-          stockNote = "Certaines couleurs dépassent le stock disponible (contraintes partiellement satisfaites).";
-        } else {
-          stockNote = "Contraintes de stock satisfaites.";
-        }
+        stockNote = unmet>0 ? "Certaines couleurs dépassent le stock disponible (contraintes partiellement satisfaites)." : "Contraintes de stock satisfaites.";
       } else {
         stockNote = "Contraintes de stock satisfaites.";
       }
     }
 
-    // recompute counts final
     const finalCounts = new Int32Array(palLen);
     for(let i=0;i<N;i++){ finalCounts[indices[i]]++; }
 
@@ -480,7 +461,7 @@ export default function App() {
   const [contrast, setContrast] = useState(0);
   const [saturation, setSaturation] = useState(0);
   const [gamma, setGamma] = useState(1.0);
-  const [sharpen, setSharpen] = useState(40); // 0..100
+  const [sharpen, setSharpen] = useState(40);
 
   // Palette & numérotation
   const [useSupplier, setUseSupplier] = useState(true);
@@ -497,9 +478,10 @@ export default function App() {
   const [secRows, setSecRows] = useState(4);
   const [showSectionGrid, setShowSectionGrid] = useState(true);
 
-  // Stocks (nouveau)
+  // Stocks
   const [stockEnabled, setStockEnabled] = useState(false);
   const [stockMap, setStockMap] = useState({}); // { label -> quantité (int) }
+  const [stockNote, setStockNote] = useState(null);
 
   // Résultats
   const mosaicRef = useRef(null);
@@ -507,7 +489,6 @@ export default function App() {
   const [counts, setCounts] = useState([]);
   const [indices, setIndices] = useState(null);
   const [lastMs, setLastMs] = useState(null);
-  const [stockNote, setStockNote] = useState(null);
 
   const totalPieces = W * H;
 
@@ -534,7 +515,7 @@ export default function App() {
     return src.filter((p) => (inclTrans ? true : !p[3]));
   }, [useSupplier, inclTrans, PAL_SUPPLIER, PAL_BL]);
 
-  // Palette affichée (tri par # fournisseur)
+  // Palette tri UI par # fournisseur
   const paletteUISorted = useMemo(() => {
     const copy = [...palette];
     copy.sort((a, b) => {
@@ -552,7 +533,7 @@ export default function App() {
     return () => { workerRef.current && workerRef.current.terminate(); };
   }, []);
 
-  // Dessin depuis indices
+  // Rendu visuel (aperçu sans numéros)
   function renderFromIndices() {
     if (!indices) return;
     const cell = 14;
@@ -576,7 +557,7 @@ export default function App() {
     for (let i = 0; i <= W; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, H * cell); g.stroke(); }
     for (let j = 0; j <= H; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(W * cell, j * cell); g.stroke(); }
 
-    // sections
+    // sections (lignes seulement)
     if (showSectionGrid && secCols > 0 && secRows > 0) {
       const sW = Math.floor(W / secCols), sH = Math.floor(H / secRows);
       g.strokeStyle = "#ddd"; g.lineWidth = 4;
@@ -596,9 +577,9 @@ export default function App() {
     let stocksArr = null;
     if (stockEnabled) {
       stocksArr = palette.map((p) => {
-        const key = p[0]; // label
+        const key = p[0];
         const v = stockMap[key];
-        if (v == null || v === "" || isNaN(v)) return -1;
+        if (v == null || v === "" || isNaN(v)) return -1; // illimité
         return Math.max(-1, parseInt(v, 10));
       });
     }
@@ -724,6 +705,7 @@ export default function App() {
 
     doc.save(`print_A3_${codeMode}_${W}x${H}.pdf`);
   }
+
   async function exportPDF_Sections() {
     if (!indices) await processImage();
     const JsPDF = await getJsPDF(); if (!JsPDF) { alert("jsPDF manquant"); return; }
@@ -763,7 +745,7 @@ export default function App() {
       n++;
     }
 
-    // Légende seule
+    // Légende en dernières pages uniquement
     addLegendPagesSortedBySupplier(doc, counts, palette);
     doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
   }
@@ -803,12 +785,6 @@ export default function App() {
 
     h2("Netteté (Unsharp Mask)", y+=6);
     y = p("Renforce les contours après redimensionnement. Des valeurs entre 30–50% sont recommandées pour des portraits. Pour des logos et aplats, 10–30% suffisent.", y+4);
-
-    h2("Palette & Transparence", y+=6);
-    y = bullet([
-      "Palette Fournisseur (99 teintes) vs BrickLink : la première suit vos références d’achat (#01→#99).",
-      "Transparentes : utiles pour des effets lumineux, mais plus difficiles à lire en rendu ‘papier’."
-    ], y+4);
 
     doc.addPage();
     title("Contraintes de stock", 18);
@@ -868,7 +844,7 @@ export default function App() {
                 </div>
               </div>
               <div className="text-sm mt-1">
-                <strong>Total pièces :</strong> {(W*H).toLocaleString("fr-FR")}
+                <strong>Total pièces :</strong> {(totalPieces).toLocaleString("fr-FR")}
                 {counts.length>0 && <> — <strong>Couleurs utilisées :</strong> {counts.length}</>}
               </div>
             </div>
@@ -954,7 +930,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* 7) Stock (nouveau) */}
+            {/* 7) Stock */}
             <div className="space-y-2 pt-2 border-t">
               <label className="text-sm font-medium">7) Contraintes de stock</label>
               <label className="text-sm flex items-center gap-2">
@@ -963,7 +939,6 @@ export default function App() {
               </label>
               <div className="flex gap-2">
                 <button className="px-2 py-1 border rounded text-xs" onClick={()=>{
-                  // Pré-remplir à partir de l'usage actuel
                   const next = {...stockMap};
                   counts.forEach(([name, qty]) => { next[name] = qty; });
                   setStockMap(next);
@@ -1059,7 +1034,7 @@ export default function App() {
 
         <canvas ref={tinyRef} style={{ display: "none" }} />
         <footer className="text-xs text-neutral-500 text-center pt-4">
-          Aperçu sans numéros. PDF : numéros sur les tenons + légende seulement en dernières pages (tri par #). Contraintes de stock disponibles.
+          Aperçu sans numéros. PDF : numéros sur les tenons + légende uniquement en dernières pages (tri par #). Contraintes de stock disponibles.
         </footer>
       </div>
     </div>

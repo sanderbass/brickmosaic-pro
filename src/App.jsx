@@ -1,4 +1,4 @@
-   import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /* ========= utilitaires de téléchargement (robustes) ========= */
 async function saveFile(dataOrUrl, filename) {
@@ -368,7 +368,7 @@ export default function App() {
 
   useEffect(() => {
     if (images[idxImg]) process(images[idxImg]);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     images, idxImg, W, H, zoom, offX, offY,
     useSupplier, inclTrans, secCols, secRows, showSectionGrid,
@@ -403,45 +403,59 @@ export default function App() {
     await saveFile(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${W}x${H}.csv`);
   }
 
-  // Aide : dessiner légende multi-colonnes au bas de la page (ou nouvelle page si trop grand)
-  function drawLegendAtBottom(doc, countsList, paletteRef, m = 10) {
+  // Construit la liste des éléments de légende triés par CODE BL croissant
+  function buildLegendItems(countsList, paletteRef) {
+    const items = countsList.map(([name, qty]) => {
+      const p = paletteRef.find((q) => q[0] === name) || [];
+      return {
+        name,
+        qty,
+        code: p[2] ?? 999999,
+        rgb: p[1] ?? [200, 200, 200],
+      };
+    });
+    items.sort((a, b) => (a.code || 0) - (b.code || 0)); // 1 → …
+    return items;
+  }
+
+  // Dessine la légende sur une page (ou plusieurs si nécessaire)
+  function drawLegendStandalone(doc, legendItems, title = "Légende (codes BrickLink) – triée 1 → …", m = 12, cols = 3) {
     const Wp = doc.internal.pageSize.getWidth();
     const Hp = doc.internal.pageSize.getHeight();
-    const title = "Légende (codes BrickLink) et quantités";
-    const rowH = 6, sw = 5; // taille swatch
-    const cols = 2;                       // 2 colonnes lisibles
+    const rowH = 6, sw = 5;
     const colW = (Wp - 2 * m) / cols;
-    const rows = Math.ceil(countsList.length / cols);
-    const legendH = rows * rowH + 8;      // + titre
 
-    let y0 = Hp - m - legendH;
-    if (y0 < m + 10) {                     // pas assez de place -> nouvelle page
+    const headerH = 8;
+    const startY = m + headerH;
+    const usableH = Hp - m - startY;
+    const rowsPerPage = Math.floor(usableH / rowH);
+    const perPage = Math.max(1, rowsPerPage) * cols;
+
+    let index = 0;
+    while (index < legendItems.length) {
       doc.addPage();
-      y0 = m + 4;
-    }
-    doc.setFontSize(12);
-    doc.text(title, Wp / 2, y0, { align: "center" });
-    let y = y0 + 4;
-    doc.setFontSize(10);
+      doc.setFontSize(12);
+      doc.text(title, Wp / 2, m, { align: "center" });
+      doc.setFontSize(10);
 
-    for (let i = 0; i < countsList.length; i++) {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      const x = m + col * colW;
-      const yy = y + row * rowH;
+      const end = Math.min(index + perPage, legendItems.length);
+      for (let i = index; i < end; i++) {
+        const local = i - index;
+        const col = local % cols;
+        const row = Math.floor(local / cols);
+        const x = m + col * colW;
+        const y = startY + row * rowH;
 
-      const [name, qty] = countsList[i];
-      const entry = paletteRef.find((p) => p[0] === name) || [];
-      const rgb = entry[1] || [200, 200, 200];
-      const code = entry[2] || "?";
-
-      doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-      doc.rect(x, yy - 4, sw, sw, "F"); doc.setDrawColor(0); doc.rect(x, yy - 4, sw, sw);
-      doc.text(`[${code}] ${name}: ${qty}`, x + sw + 3, yy);
+        const it = legendItems[i];
+        doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
+        doc.rect(x, y - 4, sw, sw, "F"); doc.setDrawColor(0); doc.rect(x, y - 4, sw, sw);
+        doc.text(`[${it.code}] ${it.name}: ${it.qty}`, x + sw + 3, y);
+      }
+      index = end;
     }
   }
 
-  // PDF A3 : AVEC NUMÉROS (plots + sections)
+  // PDF A3 : AVEC NUMÉROS (plots + sections) + légende à droite (inchangé)
   async function exportPDF_A3() {
     const JsPDF = await getJsPDF();
     if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
@@ -508,197 +522,10 @@ export default function App() {
     doc.save(`print_A3_${W}x${H}.pdf`);
   }
 
-  // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section) + LÉGENDE en bas de la dernière page
+  // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section) + LÉGENDE sur DERNIÈRE PAGE SÉPARÉE
   async function exportPDF_Sections() {
     const JsPDF = await getJsPDF();
     if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
 
     const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
-    const sW = Math.floor(Gx / secCols) || Gx, sH = Math.floor(Gy / secRows) || Gy;
-
-    const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight();
-    const m = 10, uW = Wp - 2 * m, uH = Hp - 2 * m - 10, cell = Math.min(uW / sW, uH / sH);
-    const ctx = tiny.getContext("2d"), id = ctx.getImageData(0, 0, Gx, Gy), data = id.data;
-
-    let n = 1, first = true;
-    for (let r = 0; r < secRows; r++) for (let c = 0; c < secCols; c++) {
-      if (!first) doc.addPage(); first = false;
-
-      const title = `Section ${n}`; doc.setFontSize(16); doc.text(title, Wp / 2, 10, { align: "center" });
-
-      const boardW = sW * cell, boardH = sH * cell, ox = m + (uW - boardW) / 2, oy = m + 10 + (uH - boardH) / 2;
-
-      for (let y = 0; y < sH; y++) for (let x = 0; x < sW; x++) {
-        const gx = c * sW + x, gy = r * sH + y; if (gx >= Gx || gy >= Gy) continue;
-        const i = (gy * Gx + gx) * 4, j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-        const [, rgb, code] = palette[j];
-        const px = ox + x * cell, py = oy + y * cell, rad = (cell * 0.76) / 2;
-        doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.setDrawColor(0); doc.circle(px + cell / 2, py + cell / 2, rad, "FD");
-        const lum = luminance(...rgb); doc.setTextColor(lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0);
-        doc.setFontSize(Math.max(6, cell * 0.55)); doc.text(String(code), px + cell / 2, py + cell / 2, { align: "center", baseline: "middle" });
-      }
-
-      // grille + cadre
-      doc.setDrawColor(180); doc.setLineWidth(0.1);
-      for (let i = 0; i <= sW; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + cell * sH); }
-      for (let j = 0; j <= sH; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * sW, y); }
-      doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox, oy, cell * sW, cell * sH);
-
-      n++;
-    }
-
-    // === LÉGENDE en bas de la dernière page (couleurs + codes + quantités) ===
-    drawLegendAtBottom(doc, counts, palette, 10);
-
-    doc.save(`sections_${secCols}x${secRows}_${W}x${H}.pdf`);
-  }
-
-  /* ============================== UI ============================== */
-  return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
-      <div className="max-w-7xl mx-auto space-y-6">
-        <header className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">BrickMosaic Pro — Aperçu propre, numéros uniquement en PDF</h1>
-          <div className="text-xs opacity-70">W×H indépendants · palette fournisseur 01→99 + BrickLink · Ajustements · PNG/CSV/PDF</div>
-        </header>
-
-        <div className="grid lg:grid-cols-3 gap-4">
-          {/* Réglages */}
-          <div className="bg-white rounded-2xl shadow p-4 space-y-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
-              <input type="file" accept="image/*" multiple onChange={(e) => {
-                const f = e.target.files; if (!f) return; setFiles(Array.from(f)); setIdxImg(0);
-              }} />
-              {images.length > 0 && (
-                <div className="flex items-center gap-2 mt-2">
-                  <span className="text-xs">Image :</span>
-                  <select className="border rounded px-2 py-1 text-sm" value={idxImg}
-                          onChange={(e) => setIdxImg(parseInt(e.target.value, 10))}>
-                    {images.map((_, i) => <option key={i} value={i}>{i + 1}/{images.length}</option>)}
-                  </select>
-                </div>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <label className="block text-sm font-medium">2) Grille (colonnes × lignes)</label>
-              <div className="grid grid-cols-2 gap-2">
-                <div><span className="text-xs">Largeur : {W}</span>
-                  <input type="range" min={24} max={128} step={1} value={W} onChange={(e) => setW(parseInt(e.target.value, 10))} className="w-full" />
-                </div>
-                <div><span className="text-xs">Hauteur : {H}</span>
-                  <input type="range" min={24} max={128} step={1} value={H} onChange={(e) => setH(parseInt(e.target.value, 10))} className="w-full" />
-                </div>
-              </div>
-              <div className="text-sm mt-1">
-                <strong>Total pièces :</strong> {totalPieces.toLocaleString("fr-FR")}
-                {counts.length > 0 && <> — <strong>Couleurs utilisées :</strong> {counts.length}</>}
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">3) Palette utilisée</label>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm flex items-center gap-2">
-                  <input type="radio" name="src" checked={useSupplier} onChange={() => setUseSupplier(true)} />
-                  Palette fournisseur (99 couleurs)
-                </label>
-                <label className="text-sm flex items-center gap-2">
-                  <input type="radio" name="src" checked={!useSupplier} onChange={() => setUseSupplier(false)} />
-                  BrickLink 4073 (référence)
-                </label>
-                <div className="ml-6 flex items-center gap-2">
-                  <input id="trans" type="checkbox" checked={inclTrans} onChange={(e) => setInclTrans(e.target.checked)} />
-                  <label htmlFor="trans" className="text-sm">Inclure les transparentes</label>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">4) Sections (aperçu)</label>
-              <div className="flex items-center gap-2">
-                <input id="gridsec" type="checkbox" checked={showSectionGrid} onChange={(e) => setShowSectionGrid(e.target.checked)} />
-                <label htmlFor="gridsec" className="text-sm">Afficher les lignes de sections (sans numéros)</label>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-sm">Colonnes : <input type="number" min={1} className="border rounded px-2 py-1 w-20 ml-2" value={secCols} onChange={(e) => setSecCols(parseInt(e.target.value, 10) || 1)} /></label>
-                <label className="text-sm">Lignes : <input type="number" min={1} className="border rounded px-2 py-1 w-20 ml-2" value={secRows} onChange={(e) => setSecRows(parseInt(e.target.value, 10) || 1)} /></label>
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">5) Cadrage</label>
-              <div><span className="text-xs">Zoom : {zoom.toFixed(2)}</span>
-                <input type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e) => setZoom(parseFloat(e.target.value))} className="w-full" />
-              </div>
-              <div><span className="text-xs">Décalage X : {offX.toFixed(2)}</span>
-                <input type="range" min={-0.5} max={0.5} step={0.01} value={offX} onChange={(e) => setOffX(parseFloat(e.target.value))} className="w-full" />
-              </div>
-              <div><span className="text-xs">Décalage Y : {offY.toFixed(2)}</span>
-                <input type="range" min={-0.5} max={0.5} step={0.01} value={offY} onChange={(e) => setOffY(parseFloat(e.target.value))} className="w-full" />
-              </div>
-            </div>
-
-            <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">6) Ajustements d’image</label>
-              <div><span className="text-xs">Lumière : {bright}</span>
-                <input type="range" min={-100} max={100} step={1} value={bright} onChange={(e) => setBright(parseInt(e.target.value, 10))} className="w-full" />
-              </div>
-              <div><span className="text-xs">Contraste : {contrast}</span>
-                <input type="range" min={-100} max={100} step={1} value={contrast} onChange={(e) => setContrast(parseInt(e.target.value, 10))} className="w-full" />
-              </div>
-              <div><span className="text-xs">Saturation : {saturation}</span>
-                <input type="range" min={-100} max={100} step={1} value={saturation} onChange={(e) => setSaturation(parseInt(e.target.value, 10))} className="w-full" />
-              </div>
-            </div>
-
-            <div className="pt-2 border-t space-y-2">
-              <button className="w-full bg-black text-white rounded-xl py-2" onClick={() => images[idxImg] && process(images[idxImg])} disabled={!images.length}>Générer l’aperçu</button>
-              <div className="grid grid-cols-2 gap-2">
-                <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG (sans numéros)</button>
-                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (codes + pièces)</button>
-                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (numéros + légende)</button>
-                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (numéros + légende en bas)</button>
-              </div>
-            </div>
-          </div>
-
-          {/* Aperçu + palette */}
-          <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
-            <div className="overflow-auto w-full border rounded-xl">
-              <canvas ref={mosaicRef} className="w-full h-auto" />
-            </div>
-
-            <div>
-              <h3 className="font-semibold mb-2">
-                Palette utilisée ({palette.length} couleurs) — {useSupplier ? "Fournisseur" : "BrickLink"} {inclTrans ? "(+Trans)" : "(Opaque)"}
-              </h3>
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
-                {palette.map(([label, rgb, code, isTrans]) => (
-                  <div key={`${label}-${code}`} className="flex items-center gap-2 p-2 rounded-xl border">
-                    <div className="w-6 h-6 rounded" style={{ background: `rgb(${rgb[0]},${rgb[1]},${rgb[2]})` }} />
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between text-sm">
-                        <span>{label}{isTrans ? " (Trans)" : ""}</span>
-                        <span className="opacity-70">[{code}]</span>
-                      </div>
-                      <div className="text-xs opacity-60">rgb({rgb.join(",")})</div>
-                    </div>
-                    <div className="text-xs opacity-70">{(counts.find(([n]) => n === label) || [0, 0])[1]}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <canvas ref={tinyRef} style={{ display: "none" }} />
-        <footer className="text-xs text-neutral-500 text-center pt-4">
-          Aperçu sans numéros. Les numéros et la légende apparaissent dans les PDF.
-        </footer>
-      </div>
-    </div>
-  );
-}
+    const sW = Math.floor(Gx / secCols) || Gx, sH = Math.flo

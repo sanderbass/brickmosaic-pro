@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ========= utilitaires de téléchargement (robustes) ========= */
+/* ========= utilitaires de téléchargement ========= */
 async function saveFile(dataOrUrl, filename) {
   try {
-    const mod = await import("file-saver"); // chargé dynamiquement si dispo
+    const mod = await import("file-saver");
     const saveAs = mod.saveAs || mod.default;
     return saveAs(dataOrUrl, filename);
   } catch {
@@ -14,21 +14,16 @@ async function saveFile(dataOrUrl, filename) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    if (typeof dataOrUrl !== "string") setTimeout(() => URL.revokeObjectURL(url), 1500);
+    if (typeof dataOrUrl !== "string") setTimeout(() => URL.revokeObjectURL(url), 1200);
   }
 }
-
 async function getJsPDF() {
-  try {
-    const m = await import("jspdf");
-    return m.jsPDF || m.default;
-  } catch {
-    return window.jspdf?.jsPDF || null; // si tu ajoutes le CDN dans index.html
-  }
+  try { const m = await import("jspdf"); return m.jsPDF || m.default; }
+  catch { return window.jspdf?.jsPDF || null; }
 }
 
-/* ==================== Palettes couleurs ===================== */
-/* BrickLink – codes officiels (approx hex pour affichage) */
+/* ==================== PALETTES ==================== */
+/* BrickLink – couleurs approximatives pour l'affichage */
 const BL = [
   ["White", "#F2F3F2", 1, false],
   ["Black", "#000000", 26, false],
@@ -72,7 +67,6 @@ const BL = [
   ["Light Aqua", "#A7DCD6", 152, false],
   ["Coral", "#FF6F61", 353, false],
   ["Sand Red", "#A75D5E", 58, false],
-  // Transparences
   ["Trans-Clear", "#E6F2F2", 12, true],
   ["Trans-Black", "#635F52", 251, true],
   ["Trans-Red", "#DE0000", 17, true],
@@ -92,7 +86,7 @@ const BL = [
   ["Trans-Brown", "#6F4E37", 13, true],
 ];
 
-/* Palette fournisseur KKBBRICKS (01→99) */
+/* Fournisseur (#01 → #99) */
 const SUPPLIER = [
   [1, "White", "#F2F3F2", false], [2, "Very Light Gray", "#E6E6E6", false],
   [3, "Light Gray", "#9BA19D", false], [4, "Medium Gray", "#B7B7B7", false],
@@ -131,7 +125,7 @@ const SUPPLIER = [
   [99, "Trans-Medium Blue", "#6EC1E4", true],
 ];
 
-/* ========================= helpers ========================= */
+/* ==================== helpers couleur ==================== */
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const sqr = (x) => x * x;
 const hexToRgb = (h) => {
@@ -153,9 +147,9 @@ const nearestIdx = ([r, g, b], pal) => {
 
 /* Ajustements image */
 function applyBrightnessContrast(data, brightPct, contrastPct) {
-  const B = clamp(brightPct, -100, 100) / 100 * 255; // -255..+255
+  const B = clamp(brightPct, -100, 100) / 100 * 255;
   const C = clamp(contrastPct, -100, 100);
-  const f = (259 * (C + 255)) / (255 * (259 - C)); // contraste
+  const f = (259 * (C + 255)) / (255 * (259 - C));
   for (let i = 0; i < data.length; i += 4) {
     let r = data[i] + B, g = data[i + 1] + B, b = data[i + 2] + B;
     r = clamp(f * (r - 128) + 128, 0, 255);
@@ -164,56 +158,27 @@ function applyBrightnessContrast(data, brightPct, contrastPct) {
     data[i] = r; data[i + 1] = g; data[i + 2] = b;
   }
 }
-function rgbToHsl(r, g, b) {
-  r /= 255; g /= 255; b /= 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  let h, s, l = (max + min) / 2;
-  if (max === min) { h = s = 0; }
-  else {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-    switch (max) {
-      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-      case g: h = (b - r) / d + 2; break;
-      case b: h = (r - g) / d + 4; break;
-      default: h = 0;
-    }
-    h /= 6;
-  }
-  return [h, s, l];
+function rgbToHsl(r, g, b) { r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h,s,l=(max+min)/2;
+  if(max===min){h=s=0;}
+  else{const d=max-min; s=l>0.5?d/(2-max-min):d/(max+min);
+    switch(max){case r:h=(g-b)/d+(g<b?6:0);break;case g:h=(b-r)/d+2;break;case b:h=(r-g)/d+4;break;}
+    h/=6;}
+  return [h,s,l];
 }
-function hslToRgb(h, s, l) {
-  const hue2rgb = (p, q, t) => {
-    if (t < 0) t += 1; if (t > 1) t -= 1;
-    if (t < 1 / 6) return p + (q - p) * 6 * t;
-    if (t < 1 / 2) return q;
-    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
-    return p;
-  };
-  let r, g, b;
-  if (s === 0) { r = g = b = l; }
-  else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    r = hue2rgb(p, q, h + 1 / 3);
-    g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1 / 3);
-  }
-  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
-}
-function applySaturation(data, satPct) {
-  const sDelta = clamp(satPct, -100, 100) / 100;
-  if (sDelta === 0) return;
-  for (let i = 0; i < data.length; i += 4) {
-    const r = data[i], g = data[i + 1], b = data[i + 2];
-    let [h, s, l] = rgbToHsl(r, g, b);
-    s = clamp(s + sDelta * (sDelta > 0 ? 1 - s : s), 0, 1);
-    const [nr, ng, nb] = hslToRgb(h, s, l);
-    data[i] = nr; data[i + 1] = ng; data[i + 2] = nb;
-  }
+function hslToRgb(h,s,l){const a=(p,q,t)=>{if(t<0)t+=1;if(t>1)t-=1;
+  if(t<1/6)return p+(q-p)*6*t;if(t<1/2)return q;if(t<2/3)return p+(q-p)*(2/3-t)*6;return p;};
+  let r,g,b;if(s===0){r=g=b=l;}else{const q=l<0.5?l*(1+s):l+s-l*s; const p=2*l-q;
+    r=a(p,q,h+1/3); g=a(p,q,h); b=a(p,q,h-1/3);} return [Math.round(r*255),Math.round(g*255),Math.round(b*255)];}
+function applySaturation(data, satPct){
+  const d = clamp(satPct, -100, 100)/100; if(!d) return;
+  for(let i=0;i<data.length;i+=4){const r=data[i],g=data[i+1],b=data[i+2];
+    let [h,s,l]=rgbToHsl(r,g,b); s=clamp(s + d*(d>0?1-s:s),0,1);
+    const [nr,ng,nb]=hslToRgb(h,s,l); data[i]=nr; data[i+1]=ng; data[i+2]=nb;}
 }
 
-/* corrélation fournisseur → BrickLink : renvoie [label, rgb, codeBL, isTrans, meta] */
+/* corrélation fournisseur → BrickLink */
 function correlateSupplierToBL(listSupplier, listBL) {
   const bl = listBL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]);
   return listSupplier.map(([supCode, name, hex, isTrans]) => {
@@ -230,7 +195,7 @@ function correlateSupplierToBL(listSupplier, listBL) {
   });
 }
 
-/* draw crop -> canvas W×H */
+/* crop -> canvas W×H */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   const ctx = target.getContext("2d", { willReadFrequently: true });
   target.width = gridW; target.height = gridH;
@@ -245,7 +210,48 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW, gridH);
 }
 
-/* ============================ App =========================== */
+/* ======== LÉGENDE sur pages séparées ======== */
+function addLegendPages(doc, countsList, paletteRef, codeMode, titleOverride) {
+  // construire items (code choisi + tri)
+  const items = countsList.map(([name, qty]) => {
+    const p = paletteRef.find((q) => q[0] === name) || [];
+    const rgb = p[1] || [200,200,200];
+    const codeBL = p[2] ?? 999999;
+    const codeSUP = p?.[4]?.supplierCode ?? null;
+    const code = codeMode === "SUP" ? (codeSUP ?? 999999) : codeBL;
+    return { name, qty, rgb, code };
+  }).sort((a,b)=> (a.code - b.code) || a.name.localeCompare(b.name));
+
+  const Wp = doc.internal.pageSize.getWidth();
+  const Hp = doc.internal.pageSize.getHeight();
+  const m = 12, sw = 6, rowH = 7, cols = 3;
+  const colW = (Wp - 2 * m) / cols;
+
+  let index = 0;
+  while (index < items.length) {
+    doc.addPage();
+    doc.setTextColor(0,0,0);
+    doc.setFontSize(14);
+    doc.text(titleOverride || `Légende — ${codeMode==="SUP"?"codes Fournisseur #01→#99":"codes BrickLink"} (tri ascendant)`, Wp/2, m, {align:"center"});
+    doc.setFontSize(10);
+
+    const usableH = Hp - (m + 8) - m;
+    const rowsPerPage = Math.max(1, Math.floor(usableH / rowH));
+
+    for (let row = 0; row < rowsPerPage && index < items.length; row++) {
+      for (let c = 0; c < cols && index < items.length; c++) {
+        const it = items[index++];
+        const x = m + c*colW;
+        const y = (m + 8) + (row+1)*rowH;
+        doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
+        doc.rect(x, y-5, sw, sw, "F"); doc.setDrawColor(0); doc.rect(x, y-5, sw, sw);
+        doc.text(`[${it.code}] ${it.name}: ${it.qty}`, x + sw + 3, y);
+      }
+    }
+  }
+}
+
+/* ============================ APP ============================ */
 export default function App() {
   // Images
   const [files, setFiles] = useState([]);
@@ -262,270 +268,420 @@ export default function App() {
   const [offY, setOffY] = useState(0);
 
   // Ajustements
-  const [bright, setBright] = useState(0);     // -100 .. 100
-  const [contrast, setContrast] = useState(0); // -100 .. 100
-  const [saturation, setSaturation] = useState(0); // -100 .. 100
+  const [bright, setBright] = useState(0);
+  const [contrast, setContrast] = useState(0);
+  const [saturation, setSaturation] = useState(0);
 
-  // Palette
-  const [useSupplier, setUseSupplier] = useState(true);  // par défaut : toutes tes couleurs
+  // Palette & transparents
+  const [useSupplier, setUseSupplier] = useState(true);
   const [inclTrans, setInclTrans] = useState(true);
 
-  // Sections (aperçu : lignes seulement, pas de numéros)
+  // *** NOUVEAU : type de code & tri ***
+  const [codeMode, setCodeMode] = useState("SUP"); // "BL" ou "SUP"
+
+  // Sections (aperçu)
   const [secCols, setSecCols] = useState(3);
   const [secRows, setSecRows] = useState(4);
   const [showSectionGrid, setShowSectionGrid] = useState(true);
 
-  // Refs & comptage
   const mosaicRef = useRef(null);
   const tinyRef = useRef(null);
   const [counts, setCounts] = useState([]);
   const totalPieces = W * H;
 
-  // charger fichiers
+  // charger images
   useEffect(() => {
     if (!files.length) { setImages([]); return; }
     let cancel = false;
-    (async () => {
-      const arr = [];
-      for (const f of files) {
-        const url = URL.createObjectURL(f);
-        await new Promise((res) => { const im = new Image(); im.onload = () => (arr.push(im), res()); im.src = url; });
+    (async ()=>{
+      const arr=[];
+      for(const f of files){
+        const url=URL.createObjectURL(f);
+        await new Promise(res=>{const im=new Image(); im.onload=()=>{arr.push(im);res();}; im.src=url;});
       }
-      if (!cancel) setImages(arr);
+      if(!cancel) setImages(arr);
     })();
-    return () => { cancel = true; };
+    return ()=>{cancel=true;};
   }, [files]);
 
-  // Palettes prêtes
-  const PAL_SUPPLIER = useMemo(() => correlateSupplierToBL(SUPPLIER, BL), []);
-  const PAL_BL = useMemo(() => BL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]), []);
-  const palette = useMemo(() => {
+  // palettes prêtes
+  const PAL_SUPPLIER = useMemo(()=>correlateSupplierToBL(SUPPLIER, BL),[]);
+  const PAL_BL = useMemo(()=>BL.map(([n,hex,code,t])=>[n,hexToRgb(hex),code,t]),[]);
+  const palette = useMemo(()=>{
     const src = useSupplier ? PAL_SUPPLIER : PAL_BL;
-    return src.filter((p) => (inclTrans ? true : !p[3]));
+    return src.filter(p => inclTrans ? true : !p[3]);
   }, [useSupplier, inclTrans, PAL_SUPPLIER, PAL_BL]);
 
-  // Rendu aperçu (aucun numéro)
-  function process(img) {
-    const tiny = tinyRef.current, mosaic = mosaicRef.current;
+  // rendu aperçu (pas de numéros)
+  function process(img){
+    const tiny=tinyRef.current, mosaic=mosaicRef.current;
     drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
-
-    // récupère pixels et applique les ajustements
-    const id = tiny.getContext("2d").getImageData(0, 0, W, H);
-    const data = id.data;
+    const id=tiny.getContext("2d").getImageData(0,0,W,H);
+    const data=id.data;
     applyBrightnessContrast(data, bright, contrast);
     applySaturation(data, saturation);
 
-    // quantification vers la palette
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-      const [, rgb] = palette[j];
-      data[i] = rgb[0]; data[i + 1] = rgb[1]; data[i + 2] = rgb[2];
+    // quantif palette
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const i=(y*W+x)*4;
+      const j=nearestIdx([data[i],data[i+1],data[i+2]], palette);
+      const [,rgb]=palette[j];
+      data[i]=rgb[0]; data[i+1]=rgb[1]; data[i+2]=rgb[2];
     }
-    tiny.getContext("2d").putImageData(id, 0, 0);
+    tiny.getContext("2d").putImageData(id,0,0);
 
     // comptage
-    const cts = new Map();
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
+    const cts=new Map();
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const i=(y*W+x)*4;
+      const j=nearestIdx([data[i],data[i+1],data[i+2]], palette);
       const name = palette[j][0];
-      cts.set(name, (cts.get(name) || 0) + 1);
+      cts.set(name, (cts.get(name)||0)+1);
     }
-    setCounts([...cts.entries()].sort((a, b) => b[1] - a[1]));
+    setCounts([...cts.entries()].sort((a,b)=>b[1]-a[1]));
 
-    // dessin
-    const cell = 14;
-    mosaic.width = W * cell; mosaic.height = H * cell;
-    const g = mosaic.getContext("2d"); g.clearRect(0, 0, mosaic.width, mosaic.height);
-
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const i = (y * W + x) * 4;
-      const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-      const [, rgb] = palette[j];
-      const cx = x * cell, cy = y * cell;
-      const pad = Math.max(1, Math.floor(cell * 0.12)), rad = (cell - pad * 2) / 2;
-      g.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
-      g.strokeStyle = "#111"; g.lineWidth = Math.max(1, Math.floor(cell * 0.06));
-      g.beginPath(); g.arc(cx + cell / 2, cy + cell / 2, rad, 0, Math.PI * 2); g.fill(); g.stroke();
-      // *** pas de numéros dans l’aperçu ***
+    // dessin preview
+    const cell=14; mosaic.width=W*cell; mosaic.height=H*cell;
+    const g=mosaic.getContext("2d"); g.clearRect(0,0,mosaic.width,mosaic.height);
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const i=(y*W+x)*4;
+      const j=nearestIdx([data[i],data[i+1],data[i+2]], palette);
+      const [,rgb]=palette[j];
+      const cx=x*cell, cy=y*cell;
+      const pad=Math.max(1, Math.floor(cell*0.12)), rad=(cell-pad*2)/2;
+      g.fillStyle=`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+      g.strokeStyle="#111"; g.lineWidth=Math.max(1,Math.floor(cell*0.06));
+      g.beginPath(); g.arc(cx+cell/2, cy+cell/2, rad, 0, Math.PI*2); g.fill(); g.stroke();
     }
-
-    // grille de la mosaïque
-    g.strokeStyle = "rgba(0,0,0,0.18)"; g.lineWidth = 1;
-    for (let i = 0; i <= W; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, H * cell); g.stroke(); }
-    for (let j = 0; j <= H; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(W * cell, j * cell); g.stroke(); }
-
-    // sections (lignes seulement si activé)
-    if (showSectionGrid && secCols > 0 && secRows > 0) {
-      const sW = Math.floor(W / secCols), sH = Math.floor(H / secRows);
-      g.strokeStyle = "#ddd"; g.lineWidth = 4;
-      for (let c = 1; c < secCols; c++) { const x = c * sW * cell; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H * cell); g.stroke(); }
-      for (let r = 1; r < secRows; r++) { const y = r * sH * cell; g.beginPath(); g.moveTo(0, y); g.lineTo(W * cell, y); g.stroke(); }
-      // *** pas de numéros de sections à l’écran ***
+    // grille
+    g.strokeStyle="rgba(0,0,0,0.18)"; g.lineWidth=1;
+    for(let i=0;i<=W;i++){ g.beginPath(); g.moveTo(i*cell,0); g.lineTo(i*cell,H*cell); g.stroke(); }
+    for(let j=0;j<=H;j++){ g.beginPath(); g.moveTo(0,j*cell); g.lineTo(W*cell,j*cell); g.stroke(); }
+    // sections (lignes seules)
+    if(showSectionGrid && secCols>0 && secRows>0){
+      const sW=Math.floor(W/secCols), sH=Math.floor(H/secRows);
+      g.strokeStyle="#ddd"; g.lineWidth=4;
+      for(let c=1;c<secCols;c++){ const x=c*sW*cell; g.beginPath(); g.moveTo(x,0); g.lineTo(x,H*cell); g.stroke(); }
+      for(let r=1;r<secRows;r++){ const y=r*sH*cell; g.beginPath(); g.moveTo(0,y); g.lineTo(W*cell,y); g.stroke(); }
     }
   }
 
-  useEffect(() => {
-    if (images[idxImg]) process(images[idxImg]);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    images, idxImg, W, H, zoom, offX, offY,
-    useSupplier, inclTrans, secCols, secRows, showSectionGrid,
-    bright, contrast, saturation
-  ]);
+  useEffect(()=>{ if(images[idxImg]) process(images[idxImg]); },
+    // eslint-disable-next-line
+    [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, secCols, secRows, showSectionGrid, bright, contrast, saturation, codeMode]);
 
-  /* ============================= Exports ============================= */
-  async function exportPNG() {
-    const url = mosaicRef.current.toDataURL("image/png");
-    await saveFile(url, `mosaic_${W}x${H}_${useSupplier ? "supplier" : "BL"}_${inclTrans ? "withTrans" : "opaque"}.png`);
+  /* ==================== exports ==================== */
+  async function exportPNG(){
+    const url=mosaicRef.current.toDataURL("image/png");
+    await saveFile(url, `mosaic_${W}x${H}_${useSupplier?"supplier":"BL"}_${inclTrans?"withTrans":"opaque"}.png`);
   }
-
-  async function exportCSV() {
-    const tiny = tinyRef.current, ctx = tiny.getContext("2d");
-    const id = ctx.getImageData(0, 0, tiny.width, tiny.height), data = id.data;
-    const rows = [];
-    for (let y = 0; y < tiny.height; y++) {
-      const cols = [];
-      for (let x = 0; x < tiny.width; x++) {
-        const i = (y * tiny.width + x) * 4;
-        const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-        cols.push(palette[j][2]); // code BL
+  async function exportCSV(){
+    const tiny=tinyRef.current, ctx=tiny.getContext("2d");
+    const id=ctx.getImageData(0,0,tiny.width,tiny.height), data=id.data;
+    const rows=[];
+    for(let y=0;y<tiny.height;y++){
+      const cols=[];
+      for(let x=0;x<tiny.width;x++){
+        const i=(y*tiny.width+x)*4;
+        const j=nearestIdx([data[i],data[i+1],data[i+2]], palette);
+        const entry=palette[j];
+        const codeBL = entry[2];
+        const codeSUP = entry?.[4]?.supplierCode ?? null;
+        const code = codeMode==="SUP" ? (codeSUP ?? codeBL) : codeBL;
+        cols.push(code);
       }
       rows.push(cols.join(";"));
     }
-    await saveFile(new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" }), `matrix_codes_${W}x${H}.csv`);
+    await saveFile(new Blob([rows.join("\n")], {type:"text/csv;charset=utf-8"}), `matrix_codes_${codeMode}_${W}x${H}.csv`);
 
-    const list = counts.map(([name, qty]) => {
-      const p = palette.find((q) => q[0] === name) || [];
-      return `[${p[2] ?? "?"}] ${name};${qty}`;
+    const list = counts.map(([name, qty])=>{
+      const p = palette.find(q=>q[0]===name) || [];
+      const codeBL=p[2]??"?"; const codeSUP=p?.[4]?.supplierCode ?? null;
+      const code = codeMode==="SUP" ? (codeSUP ?? codeBL) : codeBL;
+      return `[${code}] ${name};${qty}`;
     });
-    await saveFile(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${W}x${H}.csv`);
+    await saveFile(new Blob([`Code-Name;Qty\n`+list.join("\n")], {type:"text/csv;charset=utf-8"}), `parts_${codeMode}_${W}x${H}.csv`);
   }
 
-  // Construit la liste des éléments de légende triés par CODE BL croissant
-  function buildLegendItems(countsList, paletteRef) {
-    const items = countsList.map(([name, qty]) => {
-      const p = paletteRef.find((q) => q[0] === name) || [];
-      return {
-        name,
-        qty,
-        code: p[2] ?? 999999,
-        rgb: p[1] ?? [200, 200, 200],
-      };
-    });
-    items.sort((a, b) => (a.code || 0) - (b.code || 0)); // 1 → …
-    return items;
-  }
-
-  // Dessine la légende sur une page (ou plusieurs si nécessaire)
-  function drawLegendStandalone(doc, legendItems, title = "Légende (codes BrickLink) – triée 1 → …", m = 12, cols = 3) {
-    const Wp = doc.internal.pageSize.getWidth();
-    const Hp = doc.internal.pageSize.getHeight();
-    const rowH = 6, sw = 5;
-    const colW = (Wp - 2 * m) / cols;
-
-    const headerH = 8;
-    const startY = m + headerH;
-    const usableH = Hp - m - startY;
-    const rowsPerPage = Math.floor(usableH / rowH);
-    const perPage = Math.max(1, rowsPerPage) * cols;
-
-    let index = 0;
-    while (index < legendItems.length) {
-      doc.addPage();
-      doc.setFontSize(12);
-      doc.text(title, Wp / 2, m, { align: "center" });
-      doc.setFontSize(10);
-
-      const end = Math.min(index + perPage, legendItems.length);
-      for (let i = index; i < end; i++) {
-        const local = i - index;
-        const col = local % cols;
-        const row = Math.floor(local / cols);
-        const x = m + col * colW;
-        const y = startY + row * rowH;
-
-        const it = legendItems[i];
-        doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
-        doc.rect(x, y - 4, sw, sw, "F"); doc.setDrawColor(0); doc.rect(x, y - 4, sw, sw);
-        doc.text(`[${it.code}] ${it.name}: ${it.qty}`, x + sw + 3, y);
-      }
-      index = end;
-    }
-  }
-
-  // PDF A3 : AVEC NUMÉROS (plots + sections) + légende à droite (inchangé)
-  async function exportPDF_A3() {
-    const JsPDF = await getJsPDF();
-    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
-
-    const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a3" });
-    const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight(), m = 12;
+  // PDF A3 (numéros selon codeMode) + légende à droite (optionnel)
+  async function exportPDF_A3(){
+    const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
+    const doc=new JsPDF({orientation:"portrait", unit:"mm", format:"a3"});
+    const Wp=doc.internal.pageSize.getWidth(), Hp=doc.internal.pageSize.getHeight(), m=12;
     doc.setFontSize(18);
-    doc.text(`Brick Mosaic ${W}×${H} — ${useSupplier ? "Supplier" : "BrickLink"} ${inclTrans ? "(+Trans)" : "(Opaque)"}`, Wp / 2, 12, { align: "center" });
+    doc.text(`Brick Mosaic ${W}×${H} — ${codeMode==="SUP"?"codes Fournisseur":"codes BrickLink"}`, Wp/2, 12, {align:"center"});
 
-    const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
-    const id = tiny.getContext("2d").getImageData(0, 0, Gx, Gy);
-    const data = id.data;
+    const tiny=tinyRef.current, Gx=tiny.width, Gy=tiny.height;
+    const id=tiny.getContext("2d").getImageData(0,0,Gx,Gy), data=id.data;
 
-    const aspect = Gx / Gy;
-    const maxW = Wp - m * 2 - 60, maxH = Hp - m * 2 - 14;
-    let drawW = maxW, drawH = drawW / aspect;
-    if (drawH > maxH) { drawH = maxH; drawW = drawH * aspect; }
-    const cell = Math.min(drawW / Gx, drawH / Gy);
-    const ox = m, oy = 18;
+    const aspect=Gx/Gy;
+    const maxW=Wp-2*m-60, maxH=Hp-2*m-14;
+    let drawW=maxW, drawH=drawW/aspect;
+    if(drawH>maxH){ drawH=maxH; drawW=drawH*aspect; }
+    const cell=Math.min(drawW/Gx, drawH/Gy);
+    const ox=m, oy=18;
 
-    doc.setFillColor(255, 255, 255);
-    doc.rect(ox, oy, cell * Gx, cell * Gy, "F");
+    doc.setFillColor(255,255,255); doc.rect(ox,oy,cell*Gx,cell*Gy,"F");
 
-    for (let y = 0; y < Gy; y++) {
-      for (let x = 0; x < Gx; x++) {
-        const i = (y * Gx + x) * 4;
-        const j = nearestIdx([data[i], data[i + 1], data[i + 2]], palette);
-        const [, rgb, code] = palette[j];
+    for(let y=0;y<Gy;y++){
+      for(let x=0;x<Gx;x++){
+        const i=(y*Gx+x)*4;
+        const j=nearestIdx([data[i],data[i+1],data[i+2]], palette);
+        const p=palette[j]; const [,rgb]=p;
+        const codeBL=p[2], codeSUP=p?.[4]?.supplierCode ?? null;
+        const code = codeMode==="SUP" ? (codeSUP ?? codeBL) : codeBL;
 
-        const px = ox + x * cell, py = oy + y * cell, rad = (cell * 0.76) / 2;
-        doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.setDrawColor(20);
-        doc.circle(px + cell / 2, py + cell / 2, rad, "FD");
-
-        const lum = luminance(...rgb);
-        doc.setTextColor(lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0, lum < 0.5 ? 255 : 0);
-        doc.setFontSize(Math.max(6, cell * 0.55));
-        doc.text(String(code), px + cell / 2, py + cell / 2, { align: "center", baseline: "middle" });
+        const px=ox+x*cell, py=oy+y*cell, rad=(cell*0.76)/2;
+        doc.setFillColor(rgb[0],rgb[1],rgb[2]); doc.setDrawColor(20);
+        doc.circle(px+cell/2, py+cell/2, rad, "FD");
+        const lum=luminance(...rgb);
+        doc.setTextColor(lum<0.5?255:0, lum<0.5?255:0, lum<0.5?255:0);
+        doc.setFontSize(Math.max(6, cell*0.55));
+        doc.text(String(code), px+cell/2, py+cell/2, {align:"center", baseline:"middle"});
       }
     }
 
-    // Grille fine
+    // grille
     doc.setDrawColor(190); doc.setLineWidth(0.1);
-    for (let i = 0; i <= Gx; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + cell * Gy); }
-    for (let j = 0; j <= Gy; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * Gx, y); }
+    for(let i=0;i<=Gx;i++){ const x=ox+i*cell; doc.line(x,oy,x,oy+cell*Gy); }
+    for(let j=0;j<=Gy;j++){ const y=oy+j*cell; doc.line(ox,y,ox+cell*Gx,y); }
 
-    // Sections + numéros de sections
-    const sW = Math.floor(Gx / secCols) || Gx, sH = Math.floor(Gy / secRows) || Gy;
-    doc.setDrawColor(120); doc.setLineWidth(0.5);
-    for (let c = 1; c < secCols; c++) { const x = ox + c * sW * cell; doc.line(x, oy, x, oy + cell * Gy); }
-    for (let r = 1; r < secRows; r++) { const y = oy + r * sH * cell; doc.line(ox, y, ox + cell * Gx, y); }
+    // légende compacte à droite
+    let lx=ox+cell*Gx+8, ly=22; const box=6;
+    doc.setTextColor(0,0,0); doc.setFontSize(12); doc.text("Légende & Quantités", lx, ly); ly+=6; doc.setFontSize(10);
+    const items = counts.map(([name, qty])=>{
+      const p=palette.find(q=>q[0]===name)||[]; const rgb=p[1]||[200,200,200];
+      const codeBL=p[2]??"?"; const codeSUP=p?.[4]?.supplierCode ?? null;
+      const code = codeMode==="SUP" ? (codeSUP ?? codeBL) : codeBL;
+      return {name, qty, rgb, code};
+    }).sort((a,b)=>a.code-b.code);
 
-    // Légende & quantités à droite
-    let lx = ox + cell * Gx + 8, ly = 22; const box = 6;
-    doc.setTextColor(0, 0, 0); doc.setFontSize(12); doc.text("Légende & Quantités", lx, ly); ly += 6;
-    counts.forEach(([name, qty]) => {
-      const entry = palette.find((p) => p[0] === name) || [];
-      const rgb = entry[1] || [200, 200, 200], code = entry[2] || "?";
-      doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.rect(lx, ly, box, box, "F"); doc.setDrawColor(0); doc.rect(lx, ly, box, box);
-      doc.text(`[${code}] ${name}: ${qty}`, lx + box + 3, ly + 4);
-      ly += box + 3;
-      if (ly > Hp - 14) { doc.addPage(); lx = m; ly = 14; }
-    });
-
-    doc.save(`print_A3_${W}x${H}.pdf`);
+    for(const it of items){
+      doc.setFillColor(it.rgb[0],it.rgb[1],it.rgb[2]); doc.rect(lx,ly,box,box,"F"); doc.setDrawColor(0); doc.rect(lx,ly,box,box);
+      doc.text(`[${it.code}] ${it.name}: ${it.qty}`, lx+box+3, ly+4);
+      ly+=box+3; if(ly>Hp-14){ doc.addPage(); lx=m; ly=14; }
+    }
+    doc.save(`print_A3_${codeMode}_${W}x${H}.pdf`);
   }
 
-  // PDF Sections A4 : AVEC NUMÉROS (plots + titre de section) + LÉGENDE sur DERNIÈRE PAGE SÉPARÉE
-  async function exportPDF_Sections() {
-    const JsPDF = await getJsPDF();
-    if (!JsPDF) { alert("Export PDF indisponible (jsPDF non chargé). Ajoute jspdf ou un CDN)."); return; }
+  // PDF Sections A4 : dernières pages = légende seule
+  async function exportPDF_Sections(){
+    const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
 
-    const tiny = tinyRef.current, Gx = tiny.width, Gy = tiny.height;
-    const sW = Math.floor(Gx / secCols) || Gx, sH = Math.flo
+    const tiny=tinyRef.current, Gx=tiny.width, Gy=tiny.height;
+    const sW=Math.floor(Gx/secCols)||Gx, sH=Math.floor(Gy/secRows)||Gy;
+
+    const doc=new JsPDF({orientation:"portrait", unit:"mm", format:"a4"});
+    const Wp=doc.internal.pageSize.getWidth(), Hp=doc.internal.pageSize.getHeight();
+    const m=10, uW=Wp-2*m, uH=Hp-2*m-10, cell=Math.min(uW/sW, uH/sH);
+    const ctx=tiny.getContext("2d"), id=ctx.getImageData(0,0,Gx,Gy), data=id.data;
+
+    let n=1, first=true;
+    for(let r=0;r<secRows;r++){
+      for(let c=0;c<secCols;c++){
+        if(!first) doc.addPage(); first=false;
+
+        const title=`Section ${n}`;
+        doc.setFontSize(16); doc.text(title, Wp/2, 10, {align:"center"});
+
+        const boardW=sW*cell, boardH=sH*cell;
+        const ox=m+(uW-boardW)/2, oy=m+10+(uH-boardH)/2;
+
+        for(let y=0;y<sH;y++) for(let x=0;x<sW;x++){
+          const gx=c*sW+x, gy=r*sH+y; if(gx>=Gx || gy>=Gy) continue;
+          const i=(gy*Gx+gx)*4;
+          const j=nearestIdx([data[i],data[i+1],data[i+2]], palette);
+          const p=palette[j]; const [,rgb]=p;
+          const codeBL=p[2], codeSUP=p?.[4]?.supplierCode ?? null;
+          const code = codeMode==="SUP" ? (codeSUP ?? codeBL) : codeBL;
+
+          const px=ox+x*cell, py=oy+y*cell, rad=(cell*0.76)/2;
+          doc.setFillColor(rgb[0],rgb[1],rgb[2]); doc.setDrawColor(0); doc.circle(px+cell/2, py+cell/2, rad, "FD");
+          const lum=luminance(...rgb); doc.setTextColor(lum<0.5?255:0, lum<0.5?255:0, lum<0.5?255:0);
+          doc.setFontSize(Math.max(6, cell*0.55)); doc.text(String(code), px+cell/2, py+cell/2, {align:"center", baseline:"middle"});
+        }
+
+        doc.setDrawColor(180); doc.setLineWidth(0.1);
+        for(let i=0;i<=sW;i++){ const x=ox+i*cell; doc.line(x,oy,x,oy+cell*sH); }
+        for(let j=0;j<=sH;j++){ const y=oy+j*cell; doc.line(ox,y,ox+cell*sW,y); }
+        doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox,oy,cell*sW,cell*sH);
+
+        n++;
+      }
+    }
+
+    // pages finales : légende seule
+    addLegendPages(doc, counts, palette, codeMode);
+
+    doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
+  }
+
+  /* ============================ UI ============================ */
+  return (
+    <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
+      <div className="max-w-7xl mx-auto space-y-6">
+        <header className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold">BrickMosaic Pro — Codes BrickLink ou Fournisseur</h1>
+          <div className="text-xs opacity-70">Aperçu sans numéros · Numéros et légende dans les PDF</div>
+        </header>
+
+        <div className="grid lg:grid-cols-3 gap-4">
+          {/* Panneau gauche */}
+          <div className="bg-white rounded-2xl shadow p-4 space-y-4">
+            {/* 1) Import */}
+            <div>
+              <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
+              <input type="file" accept="image/*" multiple onChange={(e)=>{ const f=e.target.files; if(!f) return; setFiles(Array.from(f)); setIdxImg(0); }} />
+              {images.length>0 && (
+                <div className="flex items-center gap-2 mt-2">
+                  <span className="text-xs">Image :</span>
+                  <select className="border rounded px-2 py-1 text-sm" value={idxImg} onChange={(e)=>setIdxImg(parseInt(e.target.value,10))}>
+                    {images.map((_,i)=><option key={i} value={i}>{i+1}/{images.length}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+
+            {/* 2) Grille */}
+            <div className="space-y-2">
+              <label className="block text-sm font-medium">2) Grille (colonnes × lignes)</label>
+              <div className="grid grid-cols-2 gap-2">
+                <div><span className="text-xs">Largeur : {W}</span>
+                  <input type="range" min={24} max={128} step={1} value={W} onChange={(e)=>setW(parseInt(e.target.value,10))} className="w-full" />
+                </div>
+                <div><span className="text-xs">Hauteur : {H}</span>
+                  <input type="range" min={24} max={128} step={1} value={H} onChange={(e)=>setH(parseInt(e.target.value,10))} className="w-full" />
+                </div>
+              </div>
+              <div className="text-sm mt-1">
+                <strong>Total pièces :</strong> {totalPieces.toLocaleString("fr-FR")}
+                {counts.length>0 && <> — <strong>Couleurs utilisées :</strong> {counts.length}</>}
+              </div>
+            </div>
+
+            {/* 3) Palette */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">3) Palette utilisée</label>
+              <label className="text-sm flex items-center gap-2">
+                <input type="radio" name="src" checked={useSupplier} onChange={()=>setUseSupplier(true)} />
+                Palette fournisseur (99 couleurs)
+              </label>
+              <label className="text-sm flex items-center gap-2">
+                <input type="radio" name="src" checked={!useSupplier} onChange={()=>setUseSupplier(false)} />
+                BrickLink 4073 (référence)
+              </label>
+              <div className="ml-6 flex items-center gap-2">
+                <input id="trans" type="checkbox" checked={inclTrans} onChange={(e)=>setInclTrans(e.target.checked)} />
+                <label htmlFor="trans" className="text-sm">Inclure les transparentes</label>
+              </div>
+            </div>
+
+            {/* 4) Numéros : type de code */}
+            <div className="space-y-1 pt-2 border-t">
+              <label className="text-sm font-medium">4) Numéros & tri de légende</label>
+              <label className="text-sm flex items-center gap-2">
+                <input type="radio" name="codemode" checked={codeMode==="BL"} onChange={()=>setCodeMode("BL")} />
+                Codes BrickLink (classique)
+              </label>
+              <label className="text-sm flex items-center gap-2">
+                <input type="radio" name="codemode" checked={codeMode==="SUP"} onChange={()=>setCodeMode("SUP")} />
+                Codes Fournisseur (#01 → #99)
+              </label>
+              <div className="text-xs opacity-60 ml-6">Affecte les numéros imprimés dans les PDF et l’ordre de la légende.</div>
+            </div>
+
+            {/* 5) Sections */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">5) Sections (aperçu)</label>
+              <div className="flex items-center gap-2">
+                <input id="gridsec" type="checkbox" checked={showSectionGrid} onChange={(e)=>setShowSectionGrid(e.target.checked)} />
+                <label htmlFor="gridsec" className="text-sm">Afficher les lignes des sections (sans numéros)</label>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="text-sm">Colonnes : <input type="number" min={1} className="border rounded px-2 py-1 w-20 ml-2" value={secCols} onChange={(e)=>setSecCols(parseInt(e.target.value,10)||1)} /></label>
+                <label className="text-sm">Lignes : <input type="number" min={1} className="border rounded px-2 py-1 w-20 ml-2" value={secRows} onChange={(e)=>setSecRows(parseInt(e.target.value,10)||1)} /></label>
+              </div>
+            </div>
+
+            {/* 6) Cadrage */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">6) Cadrage</label>
+              <div><span className="text-xs">Zoom : {zoom.toFixed(2)}</span>
+                <input type="range" min={1} max={3} step={0.01} value={zoom} onChange={(e)=>setZoom(parseFloat(e.target.value))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Décalage X : {offX.toFixed(2)}</span>
+                <input type="range" min={-0.5} max={0.5} step={0.01} value={offX} onChange={(e)=>setOffX(parseFloat(e.target.value))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Décalage Y : {offY.toFixed(2)}</span>
+                <input type="range" min={-0.5} max={0.5} step={0.01} value={offY} onChange={(e)=>setOffY(parseFloat(e.target.value))} className="w-full" />
+              </div>
+            </div>
+
+            {/* 7) Ajustements */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">7) Ajustements d’image</label>
+              <div><span className="text-xs">Lumière : {bright}</span>
+                <input type="range" min={-100} max={100} step={1} value={bright} onChange={(e)=>setBright(parseInt(e.target.value,10))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Contraste : {contrast}</span>
+                <input type="range" min={-100} max={100} step={1} value={contrast} onChange={(e)=>setContrast(parseInt(e.target.value,10))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Saturation : {saturation}</span>
+                <input type="range" min={-100} max={100} step={1} value={saturation} onChange={(e)=>setSaturation(parseInt(e.target.value,10))} className="w-full" />
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="pt-2 border-t space-y-2">
+              <button className="w-full bg-black text-white rounded-xl py-2" onClick={()=>images[idxImg] && process(images[idxImg])} disabled={!images.length}>Générer l’aperçu</button>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG (sans numéros)</button>
+                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (codes + pièces)</button>
+                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (numéros + légende)</button>
+                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende en dernière page)</button>
+              </div>
+            </div>
+          </div>
+
+          {/* Aperçu + palette */}
+          <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
+            <div className="overflow-auto w-full border rounded-xl">
+              <canvas ref={mosaicRef} className="w-full h-auto" />
+            </div>
+
+            <div>
+              <h3 className="font-semibold mb-2">
+                Palette ({palette.length}) — {useSupplier ? "Fournisseur" : "BrickLink"} {inclTrans ? "(+Trans)" : "(Opaque)"} — Codes affichés : {codeMode==="SUP"?"Fournisseur":"BrickLink"}
+              </h3>
+              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
+                {palette.map(p=>{
+                  const label=p[0], rgb=p[1], codeBL=p[2], codeSUP=p?.[4]?.supplierCode ?? null;
+                  const code = codeMode==="SUP" ? (codeSUP ?? codeBL) : codeBL;
+                  const qty = (counts.find(([n])=>n===label) || [0,0])[1];
+                  return (
+                    <div key={`${label}-${codeBL}`} className="flex items-center gap-2 p-2 rounded-xl border">
+                      <div className="w-6 h-6 rounded" style={{background:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`}} />
+                      <div className="flex-1">
+                        <div className="flex items-center justify-between text-sm">
+                          <span>{label}</span>
+                          <span className="opacity-70">[{code}]</span>
+                        </div>
+                        <div className="text-xs opacity-60">rgb({rgb.join(",")})</div>
+                      </div>
+                      <div className="text-xs opacity-70">{qty}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <canvas ref={tinyRef} style={{display:"none"}} />
+        <footer className="text-xs text-neutral-500 text-center pt-4">
+          Aperçu sans numéros. Les numéros et la légende apparaissent uniquement dans les PDF. Légende finale triée selon le type de code choisi.
+        </footer>
+      </div>
+    </div>
+  );
+}

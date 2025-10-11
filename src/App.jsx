@@ -1,7 +1,7 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ========= Constantes / utils ========= */
+/* ===== Constantes / utilitaires ===== */
 const GRAM_PER_PART = 0.11; // 1x1 round plate ≈ 0.11 g
 const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
 const sqr = (x)=>x*x;
@@ -29,7 +29,7 @@ async function getJsPDF(){
   catch{ return window.jspdf?.jsPDF || null; }
 }
 
-/* ========= Palettes ========= */
+/* ===== Palettes ===== */
 const BL = [
   ["White","#F2F3F2",1,false],["Black","#000000",26,false],
   ["Very Light Gray","#E6E6E6",49,false],["Light Gray","#9BA19D",9,false],
@@ -51,7 +51,7 @@ const BL = [
   ["Lime","#A6CA3A",34,false],["Olive Green","#808E42",330,false],
   ["Sand Green","#A3C3A2",48,false],["Yellowish Green","#C9D872",226,false],
   ["Light Aqua","#A7DCD6",152,false],["Coral","#FF6F61",353,false],
-  // Trans
+  // Transparentes
   ["Trans-Clear","#E6F2F2",12,true],["Trans-Black","#635F52",251,true],
   ["Trans-Red","#DE0000",17,true],["Trans-Orange","#F08F1C",98,true],
   ["Trans-Neon Orange","#FF800D",18,true],["Trans-Yellow","#F5CD2A",19,true],
@@ -63,6 +63,7 @@ const BL = [
   ["Trans-Brown","#6F4E37",13,true],
 ];
 
+// Palette fournisseur (#01→#99)
 const SUPPLIER = [
   [1,"White","#F2F3F2",false],[2,"Very Light Gray","#E6E6E6",false],[3,"Light Gray","#9BA19D",false],[4,"Medium Gray","#B7B7B7",false],
   [5,"Dark Gray","#6D6E5C",false],[6,"Black","#000000",false],[7,"Light Bluish Gray","#A3A2A4",false],[8,"Dark Bluish Gray","#6D6E5C",false],
@@ -78,7 +79,7 @@ const SUPPLIER = [
   [45,"Lime","#A6CA3A",false],[46,"Olive Green","#808E42",false],[47,"Sand Green","#A3C3A2",false],[48,"Dark Turquoise","#008A8A",false],
   [49,"Bright Green","#4B9F4A",false],[50,"Green","#237841",false],[51,"Dark Green","#184632",false],[52,"Military Green","#5A6B54",false],
   [53,"Light Aqua","#A7DCD6",false],[54,"Coral","#FF6F61",false],
-  // Trans fournisseur
+  // Transparentes fournisseur
   [85,"Trans-Black","#635F52",true],[86,"Trans-Brown","#6F4E37",true],[87,"Trans-Purple","#5F2683",true],[88,"Trans-Dark Pink","#C94A83",true],
   [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F08F1C",true],[92,"Trans-Neon Green","#C0FF00",true],
   [93,"Trans-Green","#5AC35E",true],[94,"Trans-Blue","#0094FF",true],[95,"Trans-Light Blue","#A3D2F2",true],[96,"Trans-Red","#DE0000",true],
@@ -105,7 +106,7 @@ function correlateSupplierToBL(listSupplier, listBL){
   });
 }
 
-/* ========= Cadrage ========= */
+/* ===== Cadrage ===== */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy){
   const ctx=target.getContext("2d",{willReadFrequently:true});
   target.width=gridW; target.height=gridH;
@@ -120,7 +121,7 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy){
   ctx.drawImage(img,sx,sy,vw,vh,0,0,gridW,gridH);
 }
 
-/* ========= Worker (quantisation OKLab + dither) ========= */
+/* ===== Worker (quantisation + contraintes de stock) ===== */
 function makeQuantWorker(){
   const code = `
   const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -154,21 +155,38 @@ function makeQuantWorker(){
         r[y*w+x]=sr/ksum; g[y*w+x]=sg/ksum; b[y*w+x]=sb/ksum;
       }}
   }
+  function bestK(rgb, PAL_LAB, K, skipIdx){
+    // retourne les K meilleurs indices et distances pour ce pixel
+    let best = Array(K).fill(null).map(()=>({i:-1,d:1e18}));
+    const [r,g,b]=rgb;
+    const labPix = rgb2lab(r,g,b);
+    for(let i=0;i<PAL_LAB.length;i++){
+      if(i===skipIdx) continue;
+      const L=PAL_LAB[i][0]-labPix[0], A=PAL_LAB[i][1]-labPix[1], B=PAL_LAB[i][2]-labPix[2];
+      const d=L*L+A*A+B*B;
+      // insère trié
+      for(let k=0;k<K;k++){
+        if(d<best[k].d){ for(let m=K-1;m>k;m--) best[m]=best[m-1]; best[k]={i,d}; break; }
+      }
+    }
+    return best;
+  }
 
   onmessage=(e)=>{
-    const { img,W,H,opts,pal } = e.data;
+    const { img,W,H,opts,pal,stocks } = e.data;
     const N=W*H;
     const palRGB=pal.map(p=>p.rgb);
     const palLAB=palRGB.map(([r,g,b])=>rgb2lab(r,g,b));
     const palLen=palLAB.length;
+    const cap = (stocks && stocks.length===palLen) ? stocks.map(v=> (v==null||v<0)?Infinity:Math.max(0,Math.floor(v)) ) : Array(palLen).fill(Infinity);
 
     const R=new Float32Array(N), G=new Float32Array(N), B=new Float32Array(N);
     for(let i=0,j=0;i<N;i++,j+=4){ R[i]=img[j]; G[i]=img[j+1]; B[i]=img[j+2]; }
 
-    const Badd=Math.max(-100,Math.min(100,opts.brightness))/100*255;
-    const C=Math.max(-100,Math.min(100,opts.contrast)); const f=(259*(C+255))/(255*(259-C));
-    const gamma=Math.max(0.5,Math.min(2.5,opts.gamma));
-    const sat=Math.max(-100,Math.min(100,opts.saturation))/100;
+    const Badd=clamp(opts.brightness,-100,100)/100*255;
+    const C=clamp(opts.contrast,-100,100); const f=(259*(C+255))/(255*(259-C));
+    const gamma=clamp(opts.gamma,0.5,2.5);
+    const sat=clamp(opts.saturation,-100,100)/100;
 
     function rgb2hsl(r,g,b){ r/=255; g/=255; b/=255;
       const max=Math.max(r,g,b), min=Math.min(r,g,b); let h,s,l=(max+min)/2;
@@ -185,13 +203,13 @@ function makeQuantWorker(){
     }
 
     for(let i=0;i<N;i++){
-      let r=Math.min(255,Math.max(0, f*(R[i]+Badd-128)+128 ));
-      let g=Math.min(255,Math.max(0, f*(G[i]+Badd-128)+128 ));
-      let b=Math.min(255,Math.max(0, f*(B[i]+Badd-128)+128 ));
+      let r=clamp(f*(R[i]+Badd-128)+128,0,255);
+      let g=clamp(f*(G[i]+Badd-128)+128,0,255);
+      let b=clamp(f*(B[i]+Badd-128)+128,0,255);
       r=lin2srgb(Math.pow(srgb2lin(r),1/gamma));
       g=lin2srgb(Math.pow(srgb2lin(g),1/gamma));
       b=lin2srgb(Math.pow(srgb2lin(b),1/gamma));
-      if(sat!==0){ let [h,S,L]=rgb2hsl(r,g,b); S=Math.max(0,Math.min(1, S+sat*(sat>0?(1-S):S) )); [r,g,b]=hsl2rgb(h,S,L); }
+      if(sat!==0){ let [h,S,L]=rgb2hsl(r,g,b); S=clamp(S+sat*(sat>0?(1-S):S),0,1); [r,g,b]=hsl2rgb(h,S,L); }
       R[i]=r; G[i]=g; B[i]=b;
     }
 
@@ -199,9 +217,9 @@ function makeQuantWorker(){
       const rB=new Float32Array(R), gB=new Float32Array(G), bB=new Float32Array(B);
       gaussBlurSep(W,H,rB,gB,bB);
       const amt=opts.sharpen/100;
-      for(let i=0;i<N;i++){ R[i]=Math.max(0,Math.min(255, R[i]+amt*(R[i]-rB[i]) ));
-                           G[i]=Math.max(0,Math.min(255, G[i]+amt*(G[i]-gB[i]) ));
-                           B[i]=Math.max(0,Math.min(255, B[i]+amt*(B[i]-bB[i]) )); }
+      for(let i=0;i<N;i++){ R[i]=clamp(R[i]+amt*(R[i]-rB[i]),0,255);
+                            G[i]=clamp(G[i]+amt*(G[i]-gB[i]),0,255);
+                            B[i]=clamp(B[i]+amt*(B[i]-bB[i]),0,255); }
     }
 
     const cache=new Int16Array(4096); cache.fill(-1);
@@ -215,7 +233,7 @@ function makeQuantWorker(){
     }
 
     const indices=new Uint16Array(N); const counts=new Int32Array(palLen);
-    const dType=opts.ditherType, dAmt=Math.max(0,Math.min(1,opts.ditherAmt/100));
+    const dType=opts.ditherType, dAmt=clamp(opts.ditherAmt,0,100)/100;
 
     if(dType==='none' || dAmt===0){
       for(let i=0;i<N;i++){ const j=nearestIndexRGB(R[i]|0,G[i]|0,B[i]|0); indices[i]=j; counts[j]++; }
@@ -224,7 +242,7 @@ function makeQuantWorker(){
       const push=(x,y,fr,fg,fb,w)=>{ if(x<0||y<0||x>=W||y>=H) return; const k=y*W+x; r[k]+=fr*w*dAmt; g[k]+=fg*w*dAmt; b[k]+=fb*w*dAmt; };
       if(dType==='fs'){
         for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-          const k=y*W+x; const rr=Math.max(0,Math.min(255,Math.round(r[k]))), gg=Math.max(0,Math.min(255,Math.round(g[k]))), bb=Math.max(0,Math.min(255,Math.round(b[k])));
+          const k=y*W+x; const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
           const j=nearestIndexRGB(rr,gg,bb); indices[k]=j; counts[j]++;
           const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
           const er=rr-pr, eg=gg-pg, eb=bb-pb;
@@ -232,7 +250,7 @@ function makeQuantWorker(){
         }
       }else{ // Atkinson
         for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-          const k=y*W+x; const rr=Math.max(0,Math.min(255,Math.round(r[k]))), gg=Math.max(0,Math.min(255,Math.round(g[k]))), bb=Math.max(0,Math.min(255,Math.round(b[k])));
+          const k=y*W+x; const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
           const j=nearestIndexRGB(rr,gg,bb); indices[k]=j; counts[j]++;
           const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
           const er=(rr-pr)/8, eg=(gg-pg)/8, eb=(bb-pb)/8;
@@ -242,6 +260,7 @@ function makeQuantWorker(){
       }
     }
 
+    // Anti singletons léger
     if(opts.antiSingleton){
       const out=new Uint16Array(indices);
       const idx=(x,y)=>y*W+x;
@@ -250,19 +269,58 @@ function makeQuantWorker(){
         for(const [dx,dy] of neigh){ const xx=x+dx, yy=y+dy; if(xx<0||yy<0||xx>=W||yy>=H) continue; const vv=indices[idx(xx,yy)]; if(vv===v) same++; nb.push(vv); }
         if(same<=1 && nb.length){ const hist=new Map(); let bestv=v,bestc=0; for(const t of nb){ const c=(hist.get(t)||0)+1; hist.set(t,c); if(c>bestc){bestc=c;bestv=t;} } out[k]=bestv; }
       }
-      const final=new Uint16Array(out); out.set(final);
-      for(let i=0;i<final.length;i++) indices[i]=final[i];
+      for(let i=0;i<out.length;i++) indices[i]=out[i];
+    }
+
+    // === Contrainte de stock globale ===
+    // cap[i] = capacité max (Infinity si pas de contrainte)
+    for(let i=0;i<indices.length;i++){} // no-op pour Safari (keeps arrays used)
+    const realCounts=new Int32Array(palLen);
+    for(let i=0;i<indices.length;i++) realCounts[indices[i]]++;
+
+    // pour chaque couleur qui dépasse, on déplace les pixels vers les meilleures alternatives avec capacité restante
+    for(let color=0;color<palLen;color++){
+      let overflow = Math.max(0, realCounts[color] - cap[color]);
+      if(!isFinite(overflow) || overflow<=0) continue;
+
+      // collecte des positions de ce color
+      const pos=[]; for(let k=0;k<indices.length;k++) if(indices[k]===color) pos.push(k);
+
+      // calcule coût de switch (2e meilleur) pour chaque pixel
+      const items=[];
+      for(const k of pos){
+        const r=R[k], g=G[k], b=B[k];
+        const alt = bestK([r,g,b], palLAB, 3, color); // 3 meilleurs hors 'color'
+        items.push({k, alt}); // alt: [{i,d}, ...]
+      }
+      // on trie par "pénalité" (d2-d1 approx). Ici on prend d2 directement (d1 ≈ 0 car color est le meilleur assigné).
+      items.sort((a,b)=> (a.alt[0]?.d||1e18) - (b.alt[0]?.d||1e18) );
+
+      for(const it of items){
+        if(overflow<=0) break;
+        // trouve une alternative avec capacité
+        let chosen=-1;
+        for(const cand of it.alt){
+          const j=cand.i; if(j<0) continue;
+          if(realCounts[j] < cap[j]) { chosen=j; break; }
+        }
+        if(chosen>=0){
+          indices[it.k]=chosen;
+          realCounts[color]--; realCounts[chosen]++; overflow--;
+        }
+      }
+      // si overflow reste > 0 : pas d'alternative disponible -> on laisse tel quel
     }
 
     const finalCounts=new Int32Array(palLen);
-    for(let i=0;i<N;i++){ finalCounts[indices[i]]++; }
+    for(let i=0;i<indices.length;i++) finalCounts[indices[i]]++;
     postMessage({ indices, counts:finalCounts });
   }`;
   const blob = new Blob([code],{type:"application/javascript"});
   return new Worker(URL.createObjectURL(blob));
 }
 
-/* ========= Légende : dessiner sur la page COURANTE ========= */
+/* ===== Légende PDF (colonne unique, page(s) vierge(s)) ===== */
 function addLegendOnCurrentPage(doc, countsList, paletteRef){
   const items = countsList.map(([name,qty])=>{
     const p = paletteRef.find(q=>q[0]===name)||[];
@@ -325,26 +383,36 @@ function addLegendOnCurrentPage(doc, countsList, paletteRef){
   doc.text(`Total pièces : ${totalPieces} — Poids total estimé : ${totalWeight.toFixed(1)} g`, leftX, y + rowH);
 }
 
-/* ========= Composant ========= */
+/* ===== Composant principal ===== */
 export default function App(){
+  // images
   const [files,setFiles]=useState([]); const [images,setImages]=useState([]); const [idxImg,setIdxImg]=useState(0);
+  // grille
   const [W,setW]=useState(48); const [H,setH]=useState(64);
+  // cadrage
   const [zoom,setZoom]=useState(1.15); const [offX,setOffX]=useState(0); const [offY,setOffY]=useState(0);
+  // ajustements
   const [bright,setBright]=useState(0); const [contrast,setContrast]=useState(10); const [saturation,setSaturation]=useState(4);
   const [gamma,setGamma]=useState(1.1); const [sharpen,setSharpen]=useState(40);
+  // palette & numéros
   const [useSupplier,setUseSupplier]=useState(true); const [inclTrans,setInclTrans]=useState(true); const [codeMode,setCodeMode]=useState("SUP");
+  // dithering
   const [ditherType,setDitherType]=useState("fs"); const [ditherAmt,setDitherAmt]=useState(25); const [antiSingleton,setAntiSingleton]=useState(true);
+  // sections
   const [secCols,setSecCols]=useState(3); const [secRows,setSecRows]=useState(4); const [showSectionGrid,setShowSectionGrid]=useState(true);
-
+  // stock
+  const [useStock,setUseStock]=useState(false);
+  const [stockInputs,setStockInputs]=useState({}); // {indexPalette: qty}
+  // résultats
   const mosaicRef=useRef(null); const tinyRef=useRef(null);
   const [counts,setCounts]=useState([]); const [indices,setIndices]=useState(null);
 
   const totalPieces = W*H;
   const totalWeight = (counts.reduce((s,[,q])=>s+q,0) * GRAM_PER_PART).toFixed(1);
 
+  // load images
   useEffect(()=>{ if(!files.length){ setImages([]); return;}
-    let cancel=false;
-    (async()=>{
+    let cancel=false; (async()=>{
       const arr=[];
       for(const f of files){
         const url=URL.createObjectURL(f);
@@ -355,6 +423,7 @@ export default function App(){
     return ()=>{cancel=true;};
   },[files]);
 
+  // palettes
   const PAL_SUPPLIER = useMemo(()=>correlateSupplierToBL(SUPPLIER,BL),[]);
   const PAL_BL = useMemo(()=>BL.map(([n,hex,code,t])=>[n,hexToRgb(hex),code,t]),[]);
   const palette = useMemo(()=>{
@@ -362,11 +431,21 @@ export default function App(){
     return src.filter(p=>inclTrans?true:!p[3]);
   },[useSupplier,inclTrans,PAL_SUPPLIER,PAL_BL]);
 
+  // tri UI palette
   const paletteUISorted = useMemo(()=>{
     const copy=[...palette];
     copy.sort((a,b)=>((a?.[4]?.supplierCode??9999)-(b?.[4]?.supplierCode??9999)) || (a[2]-b[2]));
     return copy;
   },[palette]);
+
+  // stock array aligné à palette
+  const stockArray = useMemo(()=>{
+    if(!useStock) return null;
+    return palette.map((p,i)=>{
+      const v = stockInputs[i]; // si non défini => pas de limite (-1)
+      return (v===''||v==null) ? -1 : Number(v);
+    });
+  },[useStock,stockInputs,palette]);
 
   const workerRef=useRef(null);
   useEffect(()=>{ workerRef.current=makeQuantWorker(); return ()=>workerRef.current?.terminate(); },[]);
@@ -385,7 +464,6 @@ export default function App(){
     g.strokeStyle="rgba(0,0,0,0.18)"; g.lineWidth=1;
     for(let i=0;i<=W;i++){ g.beginPath(); g.moveTo(i*cell,0); g.lineTo(i*cell,H*cell); g.stroke(); }
     for(let j=0;j<=H;j++){ g.beginPath(); g.moveTo(0,j*cell); g.lineTo(W*cell,j*cell); g.stroke(); }
-
     if(showSectionGrid && secCols>0 && secRows>0){
       const sW=Math.floor(W/secCols), sH=Math.floor(H/secRows);
       g.strokeStyle="#ddd"; g.lineWidth=4;
@@ -402,7 +480,7 @@ export default function App(){
     const palPack = palette.map(p=>({rgb:p[1], codeBL:p[2], supplierCode:p?.[4]?.supplierCode ?? null}));
     const worker=workerRef.current; if(!worker) return;
     const opts={ brightness:bright, contrast, saturation, gamma, sharpen, ditherType, ditherAmt, antiSingleton };
-    const result=await new Promise(res=>{ worker.onmessage=(ev)=>res(ev.data); worker.postMessage({img:id.data,W,H,opts,pal:palPack}); });
+    const result=await new Promise(res=>{ worker.onmessage=(ev)=>res(ev.data); worker.postMessage({img:id.data,W,H,opts,pal:palPack,stocks:stockArray}); });
 
     const countsArray=[];
     for(let i=0;i<palette.length;i++){ const qty=result.counts[i]||0; if(qty>0) countsArray.push([palette[i][0],qty]); }
@@ -413,9 +491,9 @@ export default function App(){
   }
 
   useEffect(()=>{ renderFromIndices(); /* eslint-disable-next-line */ },[indices,palette,showSectionGrid,secCols,secRows,W,H]);
-  useEffect(()=>{ if(images[idxImg]) processImage(); /* eslint-disable-next-line */ },[images,idxImg,W,H,zoom,offX,offY,useSupplier,inclTrans,bright,contrast,saturation,gamma,sharpen,ditherType,ditherAmt,antiSingleton]);
+  useEffect(()=>{ if(images[idxImg]) processImage(); /* eslint-disable-next-line */ },[images,idxImg,W,H,zoom,offX,offY,useSupplier,inclTrans,bright,contrast,saturation,gamma,sharpen,ditherType,ditherAmt,antiSingleton,useStock,stockArray]);
 
-  /* ========= Exports ========= */
+  /* ===== Exports ===== */
   async function exportPNG(){ if(!indices) await processImage(); const url=mosaicRef.current.toDataURL("image/png"); await saveFile(url,`mosaic_${W}x${H}.png`); }
 
   async function exportCSV(){
@@ -439,6 +517,7 @@ export default function App(){
     await saveFile(new Blob([`Code-Name;Qty;Weight(g)\n`+list.join("\n")],{type:"text/csv;charset=utf-8"}),`parts_${codeMode}_${W}x${H}.csv`);
   }
 
+  // PDF SECTIONS (numéros + légende en dernière page)
   async function exportPDF_Sections(){
     if(!indices) await processImage();
     const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
@@ -473,19 +552,50 @@ export default function App(){
       n++;
     }
 
-    // >>> Page(s) légende : on force une page vierge <<<
-    doc.addPage();                 // <-- garanti page blanche
-    addLegendOnCurrentPage(doc, counts, palette); // imprime ici, ajoute d'autres pages si nécessaire
+    doc.addPage();                // page vierge pour la légende
+    addLegendOnCurrentPage(doc, counts, palette);
 
     doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
   }
 
+  // PDF A3 (aperçu global + légende en page suivante)
+  async function exportPDF_A3(){
+    if(!indices) await processImage();
+    const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
+    const doc=new JsPDF({orientation:"portrait",unit:"mm",format:"a3"});
+    const Wp=doc.internal.pageSize.getWidth(), Hp=doc.internal.pageSize.getHeight();
+    const m=14, uW=Wp-2*m, uH=Hp-2*m-10;
+    const cell=Math.min(uW/W, uH/H);
+
+    doc.setFontSize(18); doc.text(`Aperçu ${W}×${H}`, Wp/2, 12, {align:"center"});
+
+    const boardW=W*cell, boardH=H*cell;
+    const ox=m+(uW-boardW)/2, oy=m+10+(uH-boardH)/2;
+
+    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
+      const idp=indices[y*W+x]; const entry=palette[idp]; const [,rgb]=entry;
+      const codeBL=entry[2]; const codeSUP=entry?.[4]?.supplierCode ?? codeBL; const code=codeMode==="SUP"?codeSUP:codeBL;
+      const px=ox+x*cell, py=oy+y*cell, rad=(cell*0.76)/2;
+      doc.setFillColor(rgb[0],rgb[1],rgb[2]); doc.setDrawColor(0); doc.circle(px+cell/2,py+cell/2,rad,"FD");
+      const lum=luminance(...rgb); doc.setTextColor(lum<0.5?255:0, lum<0.5?255:0, lum<0.5?255:0);
+      doc.setFontSize(Math.max(5,cell*0.5)); doc.text(String(code), px+cell/2, py+cell/2, {align:"center", baseline:"middle"});
+    }
+    doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox,oy,cell*W,cell*H);
+
+    doc.addPage();                 // légende sur page vierge
+    addLegendOnCurrentPage(doc, counts, palette);
+
+    doc.save(`apercu_A3_${codeMode}_${W}x${H}.pdf`);
+  }
+
+  /* ===== UI ===== */
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        <h1 className="text-2xl font-bold">BrickMosaic Pro — Légende finale sur page vierge</h1>
+        <h1 className="text-2xl font-bold">BrickMosaic Pro — A3 + stock + légende finale</h1>
 
         <div className="grid lg:grid-cols-3 gap-4">
+          {/* Panneau gauche */}
           <div className="bg-white rounded-2xl shadow p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
@@ -547,23 +657,68 @@ export default function App(){
               <div><span className="text-xs">Netteté : {sharpen}%</span><input type="range" min={0} max={100} step={1} value={sharpen} onChange={(e)=>setSharpen(parseInt(e.target.value,10))} className="w-full"/></div>
             </div>
 
+            {/* ===== STOCK ===== */}
+            <div className="space-y-2 pt-2 border-t">
+              <label className="text-sm font-medium">7) Stock disponible (optionnel)</label>
+              <label className="text-sm flex items-center gap-2">
+                <input type="checkbox" checked={useStock} onChange={(e)=>setUseStock(e.target.checked)}/>
+                Activer la contrainte de stock (saisir vos quantités par couleur)
+              </label>
+              {useStock && (
+                <div className="max-h-60 overflow-auto border rounded p-2 space-y-1">
+                  {paletteUISorted.map((p,uiIdx)=>{
+                    const palIdx = palette.indexOf(p); // index réel dans palette
+                    const label=p[0], rgb=p[1], codeSUP=p?.[4]?.supplierCode ?? null, codeBL=p[2];
+                    const k = palIdx; // clé index palette
+                    return (
+                      <div key={label} className="flex items-center gap-2 text-sm">
+                        <div className="w-4 h-4 rounded" style={{background:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`}}/>
+                        <div className="flex-1 truncate">[{codeBL}] {label}{codeSUP!=null?` (#${String(codeSUP).padStart(2,"0")})`:""}</div>
+                        <input
+                          type="number" min="-1" step="1" placeholder="∞"
+                          value={stockInputs[k] ?? ""}
+                          onChange={(e)=>setStockInputs(s=>({...s,[k]:e.target.value}))}
+                          className="w-24 border rounded px-2 py-1 text-right"
+                          title="Nombre de pièces dispo (laisser vide ou -1 pour illimité)"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-xs text-neutral-500">Astuce : laisse vide ou -1 pour “illimité”. Clique “Générer l’aperçu” pour recalculer avec le stock.</p>
+            </div>
+
             <div className="pt-2 border-t space-y-2">
-              <button className="w-full bg-black text-white rounded-xl py-2" onClick={processImage} disabled={!images.length}>Générer l’aperçu</button>
+              <button className="w-full bg-black text-white rounded-xl py-2" onClick={processImage} disabled={!images.length}>Générer l’aperçu (worker)</button>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
                 <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (poids)</button>
+                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (aperçu + légende)</button>
                 <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende sur page vierge)</button>
               </div>
             </div>
           </div>
 
+          {/* Aperçu */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="text-sm">
+                Sections :&nbsp;
+                <input type="number" min={1} value={secCols} onChange={(e)=>setSecCols(parseInt(e.target.value||"1",10))} className="w-16 border rounded px-2 py-1"/> ×
+                <input type="number" min={1} value={secRows} onChange={(e)=>setSecRows(parseInt(e.target.value||"1",10))} className="w-16 border rounded px-2 py-1 ml-1"/>
+              </div>
+              <label className="text-sm flex items-center gap-2">
+                <input type="checkbox" checked={showSectionGrid} onChange={(e)=>setShowSectionGrid(e.target.checked)}/>Afficher quadrillage sections
+              </label>
+            </div>
+
             <div className="overflow-auto w-full border rounded-xl">
               <canvas ref={mosaicRef} className="w-full h-auto"/>
             </div>
 
             <div>
-              <h3 className="font-semibold mb-2">Palette (tri # fournisseur) — {inclTrans?"avec":"sans"} trans — Numéros: {codeMode==="SUP"?"Fournisseur":"BrickLink"}</h3>
+              <h3 className="font-semibold mb-2">Palette (tri # fournisseur) — {inclTrans?"avec":"sans"} transparentes — Numéros: {codeMode==="SUP"?"Fournisseur":"BrickLink"}</h3>
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
                 {paletteUISorted.map(p=>{
                   const label=p[0], rgb=p[1], codeBL=p[2], codeSUP=p?.[4]?.supplierCode ?? null;
@@ -584,7 +739,9 @@ export default function App(){
         </div>
 
         <canvas ref={tinyRef} style={{display:"none"}}/>
-        <footer className="text-xs text-neutral-500 text-center pt-4">La légende des sections est maintenant imprimée sur **une page vierge à la fin** (et continue sur d'autres pages vierges si nécessaire).</footer>
+        <footer className="text-xs text-neutral-500 text-center pt-4">
+          A3 & Sections ajoutés. La légende est **toujours** sur page(s) vierge(s). Le worker respecte le **stock disponible** en réaffectant les pixels excédentaires aux meilleures couleurs encore en stock.
+        </footer>
       </div>
     </div>
   );

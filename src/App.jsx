@@ -1,8 +1,8 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ========= Constantes et utilitaires ========= */
-const GRAM_PER_PART = 0.11; // 1x1 round plate ~0.11 g
+/* ========= Constantes / utils ========= */
+const GRAM_PER_PART = 0.11; // 1x1 round plate ≈ 0.11 g
 const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
 const sqr = (x)=>x*x;
 const hexToRgb = (h)=> {
@@ -30,7 +30,6 @@ async function getJsPDF(){
 }
 
 /* ========= Palettes ========= */
-// BrickLink (extrait pertinent + trans)
 const BL = [
   ["White","#F2F3F2",1,false],["Black","#000000",26,false],
   ["Very Light Gray","#E6E6E6",49,false],["Light Gray","#9BA19D",9,false],
@@ -52,7 +51,7 @@ const BL = [
   ["Lime","#A6CA3A",34,false],["Olive Green","#808E42",330,false],
   ["Sand Green","#A3C3A2",48,false],["Yellowish Green","#C9D872",226,false],
   ["Light Aqua","#A7DCD6",152,false],["Coral","#FF6F61",353,false],
-  // Transparentes
+  // Trans
   ["Trans-Clear","#E6F2F2",12,true],["Trans-Black","#635F52",251,true],
   ["Trans-Red","#DE0000",17,true],["Trans-Orange","#F08F1C",98,true],
   ["Trans-Neon Orange","#FF800D",18,true],["Trans-Yellow","#F5CD2A",19,true],
@@ -64,7 +63,6 @@ const BL = [
   ["Trans-Brown","#6F4E37",13,true],
 ];
 
-// Palette fournisseur (#01 → #99)
 const SUPPLIER = [
   [1,"White","#F2F3F2",false],[2,"Very Light Gray","#E6E6E6",false],[3,"Light Gray","#9BA19D",false],[4,"Medium Gray","#B7B7B7",false],
   [5,"Dark Gray","#6D6E5C",false],[6,"Black","#000000",false],[7,"Light Bluish Gray","#A3A2A4",false],[8,"Dark Bluish Gray","#6D6E5C",false],
@@ -80,7 +78,7 @@ const SUPPLIER = [
   [45,"Lime","#A6CA3A",false],[46,"Olive Green","#808E42",false],[47,"Sand Green","#A3C3A2",false],[48,"Dark Turquoise","#008A8A",false],
   [49,"Bright Green","#4B9F4A",false],[50,"Green","#237841",false],[51,"Dark Green","#184632",false],[52,"Military Green","#5A6B54",false],
   [53,"Light Aqua","#A7DCD6",false],[54,"Coral","#FF6F61",false],
-  // Transparentes fournisseur
+  // Trans fournisseur
   [85,"Trans-Black","#635F52",true],[86,"Trans-Brown","#6F4E37",true],[87,"Trans-Purple","#5F2683",true],[88,"Trans-Dark Pink","#C94A83",true],
   [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F08F1C",true],[92,"Trans-Neon Green","#C0FF00",true],
   [93,"Trans-Green","#5AC35E",true],[94,"Trans-Blue","#0094FF",true],[95,"Trans-Light Blue","#A3D2F2",true],[96,"Trans-Red","#DE0000",true],
@@ -107,7 +105,7 @@ function correlateSupplierToBL(listSupplier, listBL){
   });
 }
 
-/* ========= Cadrage simple ========= */
+/* ========= Cadrage ========= */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy){
   const ctx=target.getContext("2d",{willReadFrequently:true});
   target.width=gridW; target.height=gridH;
@@ -122,7 +120,7 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy){
   ctx.drawImage(img,sx,sy,vw,vh,0,0,gridW,gridH);
 }
 
-/* ========= Worker de quantisation (OKLab + dither FS/Atkinson) ========= */
+/* ========= Worker (quantisation OKLab + dither) ========= */
 function makeQuantWorker(){
   const code = `
   const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -158,7 +156,7 @@ function makeQuantWorker(){
   }
 
   onmessage=(e)=>{
-    const { img,W,H,opts,pal,stocks } = e.data;
+    const { img,W,H,opts,pal } = e.data;
     const N=W*H;
     const palRGB=pal.map(p=>p.rgb);
     const palLAB=palRGB.map(([r,g,b])=>rgb2lab(r,g,b));
@@ -167,10 +165,10 @@ function makeQuantWorker(){
     const R=new Float32Array(N), G=new Float32Array(N), B=new Float32Array(N);
     for(let i=0,j=0;i<N;i++,j+=4){ R[i]=img[j]; G[i]=img[j+1]; B[i]=img[j+2]; }
 
-    const Badd=clamp(opts.brightness,-100,100)/100*255;
-    const C=clamp(opts.contrast,-100,100); const f=(259*(C+255))/(255*(259-C));
-    const gamma=clamp(opts.gamma,0.5,2.5);
-    const sat=clamp(opts.saturation,-100,100)/100;
+    const Badd=Math.max(-100,Math.min(100,opts.brightness))/100*255;
+    const C=Math.max(-100,Math.min(100,opts.contrast)); const f=(259*(C+255))/(255*(259-C));
+    const gamma=Math.max(0.5,Math.min(2.5,opts.gamma));
+    const sat=Math.max(-100,Math.min(100,opts.saturation))/100;
 
     function rgb2hsl(r,g,b){ r/=255; g/=255; b/=255;
       const max=Math.max(r,g,b), min=Math.min(r,g,b); let h,s,l=(max+min)/2;
@@ -187,13 +185,13 @@ function makeQuantWorker(){
     }
 
     for(let i=0;i<N;i++){
-      let r=clamp(f*(R[i]+Badd-128)+128,0,255);
-      let g=clamp(f*(G[i]+Badd-128)+128,0,255);
-      let b=clamp(f*(B[i]+Badd-128)+128,0,255);
+      let r=Math.min(255,Math.max(0, f*(R[i]+Badd-128)+128 ));
+      let g=Math.min(255,Math.max(0, f*(G[i]+Badd-128)+128 ));
+      let b=Math.min(255,Math.max(0, f*(B[i]+Badd-128)+128 ));
       r=lin2srgb(Math.pow(srgb2lin(r),1/gamma));
       g=lin2srgb(Math.pow(srgb2lin(g),1/gamma));
       b=lin2srgb(Math.pow(srgb2lin(b),1/gamma));
-      if(sat!==0){ let [h,S,L]=rgb2hsl(r,g,b); S=clamp(S+sat*(sat>0?(1-S):S),0,1); [r,g,b]=hsl2rgb(h,S,L); }
+      if(sat!==0){ let [h,S,L]=rgb2hsl(r,g,b); S=Math.max(0,Math.min(1, S+sat*(sat>0?(1-S):S) )); [r,g,b]=hsl2rgb(h,S,L); }
       R[i]=r; G[i]=g; B[i]=b;
     }
 
@@ -201,7 +199,9 @@ function makeQuantWorker(){
       const rB=new Float32Array(R), gB=new Float32Array(G), bB=new Float32Array(B);
       gaussBlurSep(W,H,rB,gB,bB);
       const amt=opts.sharpen/100;
-      for(let i=0;i<N;i++){ R[i]=clamp(R[i]+amt*(R[i]-rB[i]),0,255); G[i]=clamp(G[i]+amt*(G[i]-gB[i]),0,255); B[i]=clamp(B[i]+amt*(B[i]-bB[i]),0,255); }
+      for(let i=0;i<N;i++){ R[i]=Math.max(0,Math.min(255, R[i]+amt*(R[i]-rB[i]) ));
+                           G[i]=Math.max(0,Math.min(255, G[i]+amt*(G[i]-gB[i]) ));
+                           B[i]=Math.max(0,Math.min(255, B[i]+amt*(B[i]-bB[i]) )); }
     }
 
     const cache=new Int16Array(4096); cache.fill(-1);
@@ -215,7 +215,7 @@ function makeQuantWorker(){
     }
 
     const indices=new Uint16Array(N); const counts=new Int32Array(palLen);
-    const dType=opts.ditherType, dAmt=clamp(opts.ditherAmt,0,100)/100;
+    const dType=opts.ditherType, dAmt=Math.max(0,Math.min(1,opts.ditherAmt/100));
 
     if(dType==='none' || dAmt===0){
       for(let i=0;i<N;i++){ const j=nearestIndexRGB(R[i]|0,G[i]|0,B[i]|0); indices[i]=j; counts[j]++; }
@@ -224,7 +224,7 @@ function makeQuantWorker(){
       const push=(x,y,fr,fg,fb,w)=>{ if(x<0||y<0||x>=W||y>=H) return; const k=y*W+x; r[k]+=fr*w*dAmt; g[k]+=fg*w*dAmt; b[k]+=fb*w*dAmt; };
       if(dType==='fs'){
         for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-          const k=y*W+x; const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
+          const k=y*W+x; const rr=Math.max(0,Math.min(255,Math.round(r[k]))), gg=Math.max(0,Math.min(255,Math.round(g[k]))), bb=Math.max(0,Math.min(255,Math.round(b[k])));
           const j=nearestIndexRGB(rr,gg,bb); indices[k]=j; counts[j]++;
           const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
           const er=rr-pr, eg=gg-pg, eb=bb-pb;
@@ -232,7 +232,7 @@ function makeQuantWorker(){
         }
       }else{ // Atkinson
         for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-          const k=y*W+x; const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
+          const k=y*W+x; const rr=Math.max(0,Math.min(255,Math.round(r[k]))), gg=Math.max(0,Math.min(255,Math.round(g[k]))), bb=Math.max(0,Math.min(255,Math.round(b[k])));
           const j=nearestIndexRGB(rr,gg,bb); indices[k]=j; counts[j]++;
           const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
           const er=(rr-pr)/8, eg=(gg-pg)/8, eb=(bb-pb)/8;
@@ -262,9 +262,8 @@ function makeQuantWorker(){
   return new Worker(URL.createObjectURL(blob));
 }
 
-/* ========= Légende PDF : colonne unique + poids ========= */
-function addLegendSingleColumn(doc, countsList, paletteRef){
-  // Prépare items (tri par code fournisseur croissant)
+/* ========= Légende : dessiner sur la page COURANTE ========= */
+function addLegendOnCurrentPage(doc, countsList, paletteRef){
   const items = countsList.map(([name,qty])=>{
     const p = paletteRef.find(q=>q[0]===name)||[];
     const rgb = p[1]||[200,200,200];
@@ -280,10 +279,8 @@ function addLegendSingleColumn(doc, countsList, paletteRef){
   const rightX = Wp - m;
   const usableTop = m + 10;
   const usableBottom = Hp - m;
-
   const pad2=(n)=>String(n).padStart(2,"0");
 
-  doc.addPage();
   doc.setFontSize(14);
   doc.text("Légende — tri par code fournisseur (#01→#99)", Wp/2, m, {align:"center"});
   doc.setFontSize(10);
@@ -298,7 +295,7 @@ function addLegendSingleColumn(doc, countsList, paletteRef){
     const leftLabel = `[${it.codeBL}] ${it.name}${it.codeSUP!=null?` (#${pad2(it.codeSUP)})`:""}`;
     const rightLabel = `${it.qty} pcs — ${grams.toFixed(1)} g`;
 
-    const maxLeftWidth = rightX - textX - 40; // place pour la partie droite
+    const maxLeftWidth = rightX - textX - 40;
     const wrapped = doc.splitTextToSize(leftLabel, maxLeftWidth);
     const neededHeight = rowH * wrapped.length;
 
@@ -310,53 +307,41 @@ function addLegendSingleColumn(doc, countsList, paletteRef){
       y = usableTop;
     }
 
-    // carré couleur
     doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
     doc.rect(rectX, y - (rowH-5), sw, sw, "F");
     doc.setDrawColor(0); doc.rect(rectX, y - (rowH-5), sw, sw);
 
-    // libellé à gauche (peut aller sur 2+ lignes)
     for(let i=0;i<wrapped.length;i++){
       doc.text(wrapped[i], textX, y + i*rowH);
     }
-    // quantité + poids alignés à droite, sur la première ligne
     doc.text(rightLabel, rightX, y, {align:"right"});
 
     y += neededHeight;
   }
 
-  // Résumé total
   if (y + rowH*2 > usableBottom) { doc.addPage(); doc.setFontSize(10); y = usableTop; }
   doc.setFontSize(11);
   const totalPieces = items.reduce((s,i)=>s+i.qty,0);
   doc.text(`Total pièces : ${totalPieces} — Poids total estimé : ${totalWeight.toFixed(1)} g`, leftX, y + rowH);
 }
 
-/* ========= Composant principal ========= */
+/* ========= Composant ========= */
 export default function App(){
-  // images
   const [files,setFiles]=useState([]); const [images,setImages]=useState([]); const [idxImg,setIdxImg]=useState(0);
-  // grille
   const [W,setW]=useState(48); const [H,setH]=useState(64);
-  // cadrage
   const [zoom,setZoom]=useState(1.15); const [offX,setOffX]=useState(0); const [offY,setOffY]=useState(0);
-  // ajustements
   const [bright,setBright]=useState(0); const [contrast,setContrast]=useState(10); const [saturation,setSaturation]=useState(4);
   const [gamma,setGamma]=useState(1.1); const [sharpen,setSharpen]=useState(40);
-  // palette & numéros
   const [useSupplier,setUseSupplier]=useState(true); const [inclTrans,setInclTrans]=useState(true); const [codeMode,setCodeMode]=useState("SUP");
-  // dithering
   const [ditherType,setDitherType]=useState("fs"); const [ditherAmt,setDitherAmt]=useState(25); const [antiSingleton,setAntiSingleton]=useState(true);
-  // sections
   const [secCols,setSecCols]=useState(3); const [secRows,setSecRows]=useState(4); const [showSectionGrid,setShowSectionGrid]=useState(true);
-  // résultats
+
   const mosaicRef=useRef(null); const tinyRef=useRef(null);
   const [counts,setCounts]=useState([]); const [indices,setIndices]=useState(null);
 
   const totalPieces = W*H;
   const totalWeight = (counts.reduce((s,[,q])=>s+q,0) * GRAM_PER_PART).toFixed(1);
 
-  // loading images
   useEffect(()=>{ if(!files.length){ setImages([]); return;}
     let cancel=false;
     (async()=>{
@@ -370,7 +355,6 @@ export default function App(){
     return ()=>{cancel=true;};
   },[files]);
 
-  // palettes
   const PAL_SUPPLIER = useMemo(()=>correlateSupplierToBL(SUPPLIER,BL),[]);
   const PAL_BL = useMemo(()=>BL.map(([n,hex,code,t])=>[n,hexToRgb(hex),code,t]),[]);
   const palette = useMemo(()=>{
@@ -401,6 +385,7 @@ export default function App(){
     g.strokeStyle="rgba(0,0,0,0.18)"; g.lineWidth=1;
     for(let i=0;i<=W;i++){ g.beginPath(); g.moveTo(i*cell,0); g.lineTo(i*cell,H*cell); g.stroke(); }
     for(let j=0;j<=H;j++){ g.beginPath(); g.moveTo(0,j*cell); g.lineTo(W*cell,j*cell); g.stroke(); }
+
     if(showSectionGrid && secCols>0 && secRows>0){
       const sW=Math.floor(W/secCols), sH=Math.floor(H/secRows);
       g.strokeStyle="#ddd"; g.lineWidth=4;
@@ -463,9 +448,9 @@ export default function App(){
     const sW=Math.floor(W/secCols)||W, sH=Math.floor(H/secRows)||H;
     const cell=Math.min(uW/sW, uH/sH);
 
-    let n=1, firstPage=true;
+    let n=1, first=true;
     for(let r=0;r<secRows;r++) for(let c=0;c<secCols;c++){
-      if(!firstPage) doc.addPage(); firstPage=false;
+      if(!first) doc.addPage(); first=false;
       doc.setFontSize(16); doc.text(`Section ${n}`, Wp/2, 10, {align:"center"});
 
       const boardW=sW*cell, boardH=sH*cell;
@@ -488,20 +473,19 @@ export default function App(){
       n++;
     }
 
-    // LÉGENDE (page(s) finale(s) uniquement) – une seule colonne + poids
-    addLegendSingleColumn(doc, counts, palette);
+    // >>> Page(s) légende : on force une page vierge <<<
+    doc.addPage();                 // <-- garanti page blanche
+    addLegendOnCurrentPage(doc, counts, palette); // imprime ici, ajoute d'autres pages si nécessaire
 
     doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
   }
 
-  /* ========= UI ========= */
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        <h1 className="text-2xl font-bold">BrickMosaic Pro — Légende verticale + poids</h1>
+        <h1 className="text-2xl font-bold">BrickMosaic Pro — Légende finale sur page vierge</h1>
 
         <div className="grid lg:grid-cols-3 gap-4">
-          {/* Panneau gauche */}
           <div className="bg-white rounded-2xl shadow p-4 space-y-4">
             <div>
               <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
@@ -537,8 +521,8 @@ export default function App(){
 
             <div className="space-y-2 pt-2 border-t">
               <label className="text-sm font-medium">4) Numéros imprimés</label>
-              <label className="text-sm flex items-center gap-2"><input type="radio" name="code" checked={codeMode==="BL"} onChange={()=>setCodeMode("BL")}/>Codes BrickLink</label>
               <label className="text-sm flex items-center gap-2"><input type="radio" name="code" checked={codeMode==="SUP"} onChange={()=>setCodeMode("SUP")}/>Codes Fournisseur (#01→#99)</label>
+              <label className="text-sm flex items-center gap-2"><input type="radio" name="code" checked={codeMode==="BL"} onChange={()=>setCodeMode("BL")}/>Codes BrickLink</label>
             </div>
 
             <div className="space-y-2 pt-2 border-t">
@@ -555,7 +539,7 @@ export default function App(){
             </div>
 
             <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">6) Ajustements d’image</label>
+              <label className="text-sm font-medium">6) Ajustements</label>
               <div><span className="text-xs">Lumière : {bright}</span><input type="range" min={-100} max={100} step={1} value={bright} onChange={(e)=>setBright(parseInt(e.target.value,10))} className="w-full"/></div>
               <div><span className="text-xs">Contraste : {contrast}</span><input type="range" min={-100} max={100} step={1} value={contrast} onChange={(e)=>setContrast(parseInt(e.target.value,10))} className="w-full"/></div>
               <div><span className="text-xs">Saturation : {saturation}</span><input type="range" min={-100} max={100} step={1} value={saturation} onChange={(e)=>setSaturation(parseInt(e.target.value,10))} className="w-full"/></div>
@@ -564,23 +548,22 @@ export default function App(){
             </div>
 
             <div className="pt-2 border-t space-y-2">
-              <button className="w-full bg-black text-white rounded-xl py-2" onClick={processImage} disabled={!images.length}>Générer l’aperçu (worker)</button>
+              <button className="w-full bg-black text-white rounded-xl py-2" onClick={processImage} disabled={!images.length}>Générer l’aperçu</button>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
-                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (avec poids)</button>
-                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende verticale + poids)</button>
+                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (poids)</button>
+                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende sur page vierge)</button>
               </div>
             </div>
           </div>
 
-          {/* Aperçu */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
             <div className="overflow-auto w-full border rounded-xl">
               <canvas ref={mosaicRef} className="w-full h-auto"/>
             </div>
 
             <div>
-              <h3 className="font-semibold mb-2">Palette (tri par # fournisseur) — {inclTrans?"avec":"sans"} transparentes — Numéros: {codeMode==="SUP"?"Fournisseur":"BrickLink"}</h3>
+              <h3 className="font-semibold mb-2">Palette (tri # fournisseur) — {inclTrans?"avec":"sans"} trans — Numéros: {codeMode==="SUP"?"Fournisseur":"BrickLink"}</h3>
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
                 {paletteUISorted.map(p=>{
                   const label=p[0], rgb=p[1], codeBL=p[2], codeSUP=p?.[4]?.supplierCode ?? null;
@@ -601,7 +584,7 @@ export default function App(){
         </div>
 
         <canvas ref={tinyRef} style={{display:"none"}}/>
-        <footer className="text-xs text-neutral-500 text-center pt-4">PDF Sections : numéros sur les plots + **légende à la fin**, colonne unique, quantité & poids par couleur (0,11 g/part). Poids total affiché.</footer>
+        <footer className="text-xs text-neutral-500 text-center pt-4">La légende des sections est maintenant imprimée sur **une page vierge à la fin** (et continue sur d'autres pages vierges si nécessaire).</footer>
       </div>
     </div>
   );

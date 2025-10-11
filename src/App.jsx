@@ -1,6 +1,7 @@
+// src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* ------------------ utilitaires ------------------ */
+/* ========= Constantes et utilitaires ========= */
 const GRAM_PER_PART = 0.11; // 1x1 round plate ~0.11 g
 const clamp = (v,a,b)=>Math.min(b,Math.max(a,v));
 const sqr = (x)=>x*x;
@@ -28,8 +29,8 @@ async function getJsPDF(){
   catch{ return window.jspdf?.jsPDF || null; }
 }
 
-/* ------------------ palettes ------------------ */
-// BrickLink (extrait + trans)
+/* ========= Palettes ========= */
+// BrickLink (extrait pertinent + trans)
 const BL = [
   ["White","#F2F3F2",1,false],["Black","#000000",26,false],
   ["Very Light Gray","#E6E6E6",49,false],["Light Gray","#9BA19D",9,false],
@@ -42,17 +43,16 @@ const BL = [
   ["Medium Nougat","#AE7A59",150,false],["Reddish Brown","#5C1E0F",88,false],
   ["Brown","#6B3F20",8,false],["Fabuland Brown","#C56E2D",160,false],
   ["Pink","#FFB5D1",221,false],["Dark Pink","#DA70D6",47,false],
-  ["Magenta","#A0006D",71,false],["Blue","#0055BF",7,false],
-  ["Dark Blue","#0B3B8F",63,false],["Medium Blue","#6C9BD2",42,false],
-  ["Bright Light Blue","#9BC4E2",102,false],["Royal Blue","#2C4DA7",272,false],
-  ["Dark Azure","#0072A3",153,false],["Medium Azure","#36A3E1",156,false],
-  ["Sand Blue","#6074A1",55,false],["Dark Turquoise","#008A8A",39,false],
-  ["Bright Green","#4B9F4A",36,false],["Green","#237841",6,false],
-  ["Dark Green","#184632",80,false],["Lime","#A6CA3A",34,false],
-  ["Olive Green","#808E42",330,false],["Sand Green","#A3C3A2",48,false],
-  ["Yellowish Green","#C9D872",226,false],["Light Aqua","#A7DCD6",152,false],
-  ["Coral","#FF6F61",353,false],["Sand Red","#A75D5E",58,false],
-  // Trans
+  ["Blue","#0055BF",7,false],["Dark Blue","#0B3B8F",63,false],
+  ["Medium Blue","#6C9BD2",42,false],["Bright Light Blue","#9BC4E2",102,false],
+  ["Royal Blue","#2C4DA7",272,false],["Dark Azure","#0072A3",153,false],
+  ["Medium Azure","#36A3E1",156,false],["Sand Blue","#6074A1",55,false],
+  ["Dark Turquoise","#008A8A",39,false],["Bright Green","#4B9F4A",36,false],
+  ["Green","#237841",6,false],["Dark Green","#184632",80,false],
+  ["Lime","#A6CA3A",34,false],["Olive Green","#808E42",330,false],
+  ["Sand Green","#A3C3A2",48,false],["Yellowish Green","#C9D872",226,false],
+  ["Light Aqua","#A7DCD6",152,false],["Coral","#FF6F61",353,false],
+  // Transparentes
   ["Trans-Clear","#E6F2F2",12,true],["Trans-Black","#635F52",251,true],
   ["Trans-Red","#DE0000",17,true],["Trans-Orange","#F08F1C",98,true],
   ["Trans-Neon Orange","#FF800D",18,true],["Trans-Yellow","#F5CD2A",19,true],
@@ -80,7 +80,7 @@ const SUPPLIER = [
   [45,"Lime","#A6CA3A",false],[46,"Olive Green","#808E42",false],[47,"Sand Green","#A3C3A2",false],[48,"Dark Turquoise","#008A8A",false],
   [49,"Bright Green","#4B9F4A",false],[50,"Green","#237841",false],[51,"Dark Green","#184632",false],[52,"Military Green","#5A6B54",false],
   [53,"Light Aqua","#A7DCD6",false],[54,"Coral","#FF6F61",false],
-  // Trans fournisseur
+  // Transparentes fournisseur
   [85,"Trans-Black","#635F52",true],[86,"Trans-Brown","#6F4E37",true],[87,"Trans-Purple","#5F2683",true],[88,"Trans-Dark Pink","#C94A83",true],
   [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F08F1C",true],[92,"Trans-Neon Green","#C0FF00",true],
   [93,"Trans-Green","#5AC35E",true],[94,"Trans-Blue","#0094FF",true],[95,"Trans-Light Blue","#A3D2F2",true],[96,"Trans-Red","#DE0000",true],
@@ -107,7 +107,7 @@ function correlateSupplierToBL(listSupplier, listBL){
   });
 }
 
-/* ------------------ rendu & cadrage ------------------ */
+/* ========= Cadrage simple ========= */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy){
   const ctx=target.getContext("2d",{willReadFrequently:true});
   target.width=gridW; target.height=gridH;
@@ -122,7 +122,7 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy){
   ctx.drawImage(img,sx,sy,vw,vh,0,0,gridW,gridH);
 }
 
-/* ------------------ worker quantisation ------------------ */
+/* ========= Worker de quantisation (OKLab + dither FS/Atkinson) ========= */
 function makeQuantWorker(){
   const code = `
   const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -250,49 +250,21 @@ function makeQuantWorker(){
         for(const [dx,dy] of neigh){ const xx=x+dx, yy=y+dy; if(xx<0||yy<0||xx>=W||yy>=H) continue; const vv=indices[idx(xx,yy)]; if(vv===v) same++; nb.push(vv); }
         if(same<=1 && nb.length){ const hist=new Map(); let bestv=v,bestc=0; for(const t of nb){ const c=(hist.get(t)||0)+1; hist.set(t,c); if(c>bestc){bestc=c;bestv=t;} } out[k]=bestv; }
       }
-      counts.fill(0); for(let i=0;i<N;i++){ counts[out[i]]++; } indices.set(out);
-    }
-
-    // Contraintes de stock
-    let stockNote=null;
-    if(Array.isArray(stocks)){
-      const cap=new Int32Array(palLen);
-      for(let i=0;i<palLen;i++){ cap[i]=(stocks[i]==null||stocks[i]<0)?2147483647:(stocks[i]|0); }
-      const byColor=Array.from({length:palLen},()=>[]);
-      for(let k=0;k<N;k++){ byColor[indices[k]].push(k); }
-      let unmet=0; const deficit=new Int32Array(palLen);
-      for(let i=0;i<palLen;i++){ const d=counts[i]-cap[i]; deficit[i]=d>0?d:0; if(deficit[i]>0) unmet+=deficit[i]; }
-      if(unmet>0){
-        function nearestAvail(r,g,b,forbid){
-          const lab=rgb2lab(r,g,b); let best=-1,bd=1e18;
-          for(let j=0;j<palLen;j++){
-            if(j===forbid) continue; if(cap[j]-counts[j]<=0) continue;
-            const L=palLAB[j][0]-lab[0],A=palLAB[j][1]-lab[1],B=palLAB[j][2]-lab[2]; const d=L*L+A*A+B*B;
-            if(d<bd){bd=d;best=j;}
-          } return best;
-        }
-        for(let i=0;i<palLen;i++){
-          let need=deficit[i]; if(need<=0) continue; const list=byColor[i]; let ptr=0;
-          while(need>0 && ptr<list.length){
-            const k=list[ptr++]; const rr=R[k], gg=G[k], bb=B[k]; const j=nearestAvail(rr,gg,bb,i);
-            if(j>=0 && (cap[j]-counts[j])>0){ counts[i]--; counts[j]++; indices[k]=j; need--; }
-          }
-          if(need>0) unmet+=need;
-        }
-        stockNote = unmet>0 ? "Certaines couleurs dépassent le stock (contraintes partielles)." : "Contraintes de stock satisfaites.";
-      }else stockNote="Contraintes de stock satisfaites.";
+      const final=new Uint16Array(out); out.set(final);
+      for(let i=0;i<final.length;i++) indices[i]=final[i];
     }
 
     const finalCounts=new Int32Array(palLen);
     for(let i=0;i<N;i++){ finalCounts[indices[i]]++; }
-    postMessage({ indices, counts:finalCounts, stockNote });
+    postMessage({ indices, counts:finalCounts });
   }`;
   const blob = new Blob([code],{type:"application/javascript"});
   return new Worker(URL.createObjectURL(blob));
 }
 
-/* --------- Légende PDF : colonne unique + poids (g) --------- */
+/* ========= Légende PDF : colonne unique + poids ========= */
 function addLegendSingleColumn(doc, countsList, paletteRef){
+  // Prépare items (tri par code fournisseur croissant)
   const items = countsList.map(([name,qty])=>{
     const p = paletteRef.find(q=>q[0]===name)||[];
     const rgb = p[1]||[200,200,200];
@@ -309,14 +281,15 @@ function addLegendSingleColumn(doc, countsList, paletteRef){
   const usableTop = m + 10;
   const usableBottom = Hp - m;
 
+  const pad2=(n)=>String(n).padStart(2,"0");
+
+  doc.addPage();
   doc.setFontSize(14);
   doc.text("Légende — tri par code fournisseur (#01→#99)", Wp/2, m, {align:"center"});
   doc.setFontSize(10);
 
   let y = usableTop;
   let totalWeight = 0;
-
-  const pad2=(n)=>String(n).padStart(2,"0");
 
   for(const it of items){
     const grams = it.qty * GRAM_PER_PART;
@@ -325,8 +298,7 @@ function addLegendSingleColumn(doc, countsList, paletteRef){
     const leftLabel = `[${it.codeBL}] ${it.name}${it.codeSUP!=null?` (#${pad2(it.codeSUP)})`:""}`;
     const rightLabel = `${it.qty} pcs — ${grams.toFixed(1)} g`;
 
-    // Mesure de la place à gauche (on laisse ~38px pour la case et marge + largeur du nombre à droite)
-    const maxLeftWidth = rightX - textX - 40;
+    const maxLeftWidth = rightX - textX - 40; // place pour la partie droite
     const wrapped = doc.splitTextToSize(leftLabel, maxLeftWidth);
     const neededHeight = rowH * wrapped.length;
 
@@ -338,27 +310,29 @@ function addLegendSingleColumn(doc, countsList, paletteRef){
       y = usableTop;
     }
 
-    // Carré couleur
+    // carré couleur
     doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
-    doc.rect(rectX, y - (rowH-5), sw, sw, "F"); doc.setDrawColor(0); doc.rect(rectX, y - (rowH-5), sw, sw);
+    doc.rect(rectX, y - (rowH-5), sw, sw, "F");
+    doc.setDrawColor(0); doc.rect(rectX, y - (rowH-5), sw, sw);
 
-    // Texte gauche (peut être sur 2+ lignes)
+    // libellé à gauche (peut aller sur 2+ lignes)
     for(let i=0;i<wrapped.length;i++){
       doc.text(wrapped[i], textX, y + i*rowH);
     }
-    // Quantité + poids aligné à droite, sur la 1re ligne
+    // quantité + poids alignés à droite, sur la première ligne
     doc.text(rightLabel, rightX, y, {align:"right"});
 
     y += neededHeight;
   }
 
-  // Résumé
+  // Résumé total
   if (y + rowH*2 > usableBottom) { doc.addPage(); doc.setFontSize(10); y = usableTop; }
   doc.setFontSize(11);
-  doc.text(`Total pièces : ${items.reduce((s,i)=>s+i.qty,0)} — Poids total estimé : ${totalWeight.toFixed(1)} g`, leftX, y + rowH);
+  const totalPieces = items.reduce((s,i)=>s+i.qty,0);
+  doc.text(`Total pièces : ${totalPieces} — Poids total estimé : ${totalWeight.toFixed(1)} g`, leftX, y + rowH);
 }
 
-/* ------------------ composant principal ------------------ */
+/* ========= Composant principal ========= */
 export default function App(){
   // images
   const [files,setFiles]=useState([]); const [images,setImages]=useState([]); const [idxImg,setIdxImg]=useState(0);
@@ -375,18 +349,14 @@ export default function App(){
   const [ditherType,setDitherType]=useState("fs"); const [ditherAmt,setDitherAmt]=useState(25); const [antiSingleton,setAntiSingleton]=useState(true);
   // sections
   const [secCols,setSecCols]=useState(3); const [secRows,setSecRows]=useState(4); const [showSectionGrid,setShowSectionGrid]=useState(true);
-  // stocks
-  const [stockEnabled,setStockEnabled]=useState(false);
-  const [stockMap,setStockMap]=useState({});
-  const [stockNote,setStockNote]=useState(null);
   // résultats
   const mosaicRef=useRef(null); const tinyRef=useRef(null);
-  const [counts,setCounts]=useState([]); const [indices,setIndices]=useState(null); const [lastMs,setLastMs]=useState(null);
+  const [counts,setCounts]=useState([]); const [indices,setIndices]=useState(null);
 
   const totalPieces = W*H;
   const totalWeight = (counts.reduce((s,[,q])=>s+q,0) * GRAM_PER_PART).toFixed(1);
 
-  // charger images
+  // loading images
   useEffect(()=>{ if(!files.length){ setImages([]); return;}
     let cancel=false;
     (async()=>{
@@ -414,11 +384,9 @@ export default function App(){
     return copy;
   },[palette]);
 
-  // worker
   const workerRef=useRef(null);
   useEffect(()=>{ workerRef.current=makeQuantWorker(); return ()=>workerRef.current?.terminate(); },[]);
 
-  // rendu apercu
   function renderFromIndices(){
     if(!indices) return;
     const cell=14; const canvas=mosaicRef.current;
@@ -441,42 +409,28 @@ export default function App(){
     }
   }
 
-  // pipeline
   async function processImage(){
     const img=images[idxImg]; if(!img) return;
     const tiny=tinyRef.current; drawCroppedToRect(img,tiny,W,H,zoom,offX,offY);
     const id=tiny.getContext("2d").getImageData(0,0,W,H);
 
-    // stocks alignés
-    let stocksArr=null;
-    if(stockEnabled){
-      stocksArr = palette.map(p=>{
-        const key=p[0]; const raw=stockMap[key];
-        if(raw==null || raw==="" || isNaN(Number(raw))) return -1;
-        return Math.max(-1, parseInt(raw,10));
-      });
-    }
-
     const palPack = palette.map(p=>({rgb:p[1], codeBL:p[2], supplierCode:p?.[4]?.supplierCode ?? null}));
-
     const worker=workerRef.current; if(!worker) return;
     const opts={ brightness:bright, contrast, saturation, gamma, sharpen, ditherType, ditherAmt, antiSingleton };
-    const t0=performance.now();
-    const result=await new Promise(res=>{ worker.onmessage=(ev)=>res(ev.data); worker.postMessage({img:id.data,W,H,opts,pal:palPack,stocks:stocksArr},[id.data.buffer]); });
-    const t1=performance.now();
+    const result=await new Promise(res=>{ worker.onmessage=(ev)=>res(ev.data); worker.postMessage({img:id.data,W,H,opts,pal:palPack}); });
 
     const countsArray=[];
     for(let i=0;i<palette.length;i++){ const qty=result.counts[i]||0; if(qty>0) countsArray.push([palette[i][0],qty]); }
     countsArray.sort((a,b)=>b[1]-a[1]);
 
-    setIndices(result.indices); setCounts(countsArray); setLastMs(Math.round(t1-t0)); setStockNote(result.stockNote||null);
+    setIndices(result.indices); setCounts(countsArray);
     renderFromIndices();
   }
 
   useEffect(()=>{ renderFromIndices(); /* eslint-disable-next-line */ },[indices,palette,showSectionGrid,secCols,secRows,W,H]);
-  useEffect(()=>{ if(images[idxImg]) processImage(); /* eslint-disable-next-line */ },[images,idxImg,W,H,zoom,offX,offY,useSupplier,inclTrans,bright,contrast,saturation,gamma,sharpen,ditherType,ditherAmt,antiSingleton,stockEnabled]);
+  useEffect(()=>{ if(images[idxImg]) processImage(); /* eslint-disable-next-line */ },[images,idxImg,W,H,zoom,offX,offY,useSupplier,inclTrans,bright,contrast,saturation,gamma,sharpen,ditherType,ditherAmt,antiSingleton]);
 
-  /* ------------------ exports ------------------ */
+  /* ========= Exports ========= */
   async function exportPNG(){ if(!indices) await processImage(); const url=mosaicRef.current.toDataURL("image/png"); await saveFile(url,`mosaic_${W}x${H}.png`); }
 
   async function exportCSV(){
@@ -500,51 +454,6 @@ export default function App(){
     await saveFile(new Blob([`Code-Name;Qty;Weight(g)\n`+list.join("\n")],{type:"text/csv;charset=utf-8"}),`parts_${codeMode}_${W}x${H}.csv`);
   }
 
-  async function exportPDF_A3(){
-    if(!indices) await processImage();
-    const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
-    const doc=new JsPDF({orientation:"portrait",unit:"mm",format:"a3"});
-    const Wp=doc.internal.pageSize.getWidth(), Hp=doc.internal.pageSize.getHeight(), m=12;
-
-    doc.setFontSize(18);
-    doc.text(`Brick Mosaic ${W}×${H} — numéros: ${codeMode==="SUP"?"Fournisseur #":"BrickLink"}`, Wp/2, 12, {align:"center"});
-
-    const aspect=W/H; const maxW=Wp-2*m-60, maxH=Hp-2*m-14;
-    let drawW=maxW, drawH=drawW/aspect; if(drawH>maxH){ drawH=maxH; drawW=drawH*aspect; }
-    const cell=Math.min(drawW/W, drawH/H); const ox=m, oy=18;
-
-    doc.setFillColor(255,255,255); doc.rect(ox,oy,cell*W,cell*H,"F");
-
-    for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-      const idx=indices[y*W+x]; const entry=palette[idx]; const [,rgb]=entry;
-      const codeBL=entry[2]; const codeSUP=entry?.[4]?.supplierCode ?? codeBL; const code=codeMode==="SUP"?codeSUP:codeBL;
-      const px=ox+x*cell, py=oy+y*cell, rad=(cell*0.76)/2;
-      doc.setFillColor(rgb[0],rgb[1],rgb[2]); doc.setDrawColor(20); doc.circle(px+cell/2,py+cell/2,rad,"FD");
-      const lum=luminance(...rgb); doc.setTextColor(lum<0.5?255:0, lum<0.5?255:0, lum<0.5?255:0);
-      doc.setFontSize(Math.max(6,cell*0.55)); doc.text(String(code), px+cell/2, py+cell/2, {align:"center", baseline:"middle"});
-    }
-    doc.setDrawColor(190); doc.setLineWidth(0.1);
-    for(let i=0;i<=W;i++){ const x=ox+i*cell; doc.line(x,oy,x,oy+cell*H);}
-    for(let j=0;j<=H;j++){ const y=oy+j*cell; doc.line(ox,y,ox+cell*W,y); }
-
-    // mini-légende (simple)
-    let lx=ox+cell*W+8, ly=22; const box=6;
-    doc.setTextColor(0,0,0); doc.setFontSize(12); doc.text("Légende & quantités", lx, ly); ly+=6; doc.setFontSize(10);
-    const items = counts.map(([name,qty])=>{
-      const p=palette.find(q=>q[0]===name)||[]; const rgb=p[1]||[200,200,200]; const codeBL=p[2]??"?"; const codeSUP=p?.[4]?.supplierCode ?? null;
-      return {name,qty,rgb,codeBL,codeSUP};
-    }).sort((a,b)=>((a.codeSUP??9999)-(b.codeSUP??9999))||a.name.localeCompare(b.name));
-    const pad2=(n)=>String(n).padStart(2,"0");
-    for(const it of items){
-      doc.setFillColor(it.rgb[0],it.rgb[1],it.rgb[2]); doc.rect(lx,ly,box,box,"F"); doc.setDrawColor(0); doc.rect(lx,ly,box,box);
-      const grams=(it.qty*GRAM_PER_PART).toFixed(1);
-      const suf=it.codeSUP!=null?` (#${pad2(it.codeSUP)})`:"";
-      doc.text(`[${it.codeBL}] ${it.name}${suf}: ${it.qty} pcs — ${grams} g`, lx+box+3, ly+4);
-      ly+=box+3; if(ly>Hp-14){ doc.addPage(); lx=m; ly=14; }
-    }
-    doc.save(`print_A3_${codeMode}_${W}x${H}.pdf`);
-  }
-
   async function exportPDF_Sections(){
     if(!indices) await processImage();
     const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
@@ -554,9 +463,9 @@ export default function App(){
     const sW=Math.floor(W/secCols)||W, sH=Math.floor(H/secRows)||H;
     const cell=Math.min(uW/sW, uH/sH);
 
-    let n=1, first=true;
+    let n=1, firstPage=true;
     for(let r=0;r<secRows;r++) for(let c=0;c<secCols;c++){
-      if(!first) doc.addPage(); first=false;
+      if(!firstPage) doc.addPage(); firstPage=false;
       doc.setFontSize(16); doc.text(`Section ${n}`, Wp/2, 10, {align:"center"});
 
       const boardW=sW*cell, boardH=sH*cell;
@@ -579,51 +488,21 @@ export default function App(){
       n++;
     }
 
-    // Légende en dernière(s) page(s) : colonne unique + poids
+    // LÉGENDE (page(s) finale(s) uniquement) – une seule colonne + poids
     addLegendSingleColumn(doc, counts, palette);
+
     doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
   }
 
-  // PDF guide (inchangé par rapport à l’itération précédente)
-  async function exportPDF_Guide(){
-    const JsPDF=await getJsPDF(); if(!JsPDF){ alert("jsPDF manquant"); return; }
-    const doc=new JsPDF({orientation:"portrait",unit:"mm",format:"a4"});
-    const Wp=doc.internal.pageSize.getWidth(), m=12;
-    const title=(t,y)=>{doc.setFontSize(16); doc.text(t,Wp/2,y,{align:"center"});};
-    const h2=(t,y)=>{doc.setFontSize(13); doc.text(t,m,y);};
-    const p=(txt,y)=>{doc.setFontSize(10); const lines=doc.splitTextToSize(txt,Wp-2*m); doc.text(lines,m,y); return y+lines.length*5+2;};
-    const bullet=(lines,y)=>{doc.setFontSize(10); for(const l of lines){ const w=doc.splitTextToSize("• "+l,Wp-2*m); doc.text(w,m,y); y+=w.length*5; } return y+2;};
-
-    title("Guide des réglages — BrickMosaic Pro",18);
-    let y=28;
-    y=p("Ce guide explique l’impact des réglages sur la photo et comment optimiser un portrait en stud-art.",y);
-    h2("Dithering & Anti-bruit",y+=8);
-    y=bullet(["Floyd–Steinberg : précis mais plus granuleux.","Atkinson : rendu plus doux.","Anti-singleton : supprime les plots isolés."],y+4);
-    h2("Lumière/Contraste/Saturation",y+=6);
-    y=bullet(["Lumière : éclaircit/assombrit.","Contraste : accentue l’écart sombre/clair.","Saturation : renforce/atténue les couleurs."],y+4);
-    h2("Gamma",y+=6); y=p("Ajuste la courbe tonale (<1 assombrit, >1 éclaircit).",y+4);
-    h2("Netteté",y+=6); y=p("30–50% pour portraits, 10–30% pour logos.",y+4);
-    doc.addPage();
-    title("Contraintes de stock",18);
-    y=28;
-    y=bullet(["Activez l’option et saisissez vos quantités par couleur.","Réallocation automatique vers la couleur dispo la plus proche (OKLab)."],y);
-    h2("Poids",y+=6); y=p(`1x1 round ≈ ${GRAM_PER_PART} g. Le PDF Sections calcule le poids par couleur et le total.`,y+4);
-    doc.save("Guide_BrickMosaic_Pro.pdf");
-  }
-
-  /* ------------------ UI ------------------ */
+  /* ========= UI ========= */
   return (
     <div className="min-h-screen bg-neutral-50 text-neutral-900 p-6">
       <div className="max-w-7xl mx-auto space-y-6">
-        <header className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold">BrickMosaic Pro — OKLab + Dithering + Stock</h1>
-          <div className="text-xs opacity-70">Aperçu sans numéros · PDF numérotés · Légende colonne unique + poids · {lastMs!=null?`Traitement ${lastMs} ms`:"Prêt"}</div>
-        </header>
+        <h1 className="text-2xl font-bold">BrickMosaic Pro — Légende verticale + poids</h1>
 
         <div className="grid lg:grid-cols-3 gap-4">
-          {/* panneau gauche */}
+          {/* Panneau gauche */}
           <div className="bg-white rounded-2xl shadow p-4 space-y-4">
-            {/* 1) Import */}
             <div>
               <label className="block text-sm font-medium mb-1">1) Charger photo(s)</label>
               <input type="file" accept="image/*" multiple onChange={(e)=>{ const f=e.target.files; if(!f) return; setFiles(Array.from(f)); setIdxImg(0); }} />
@@ -637,9 +516,8 @@ export default function App(){
               )}
             </div>
 
-            {/* 2) Grille */}
             <div className="space-y-2">
-              <label className="block text-sm font-medium">2) Grille (colonnes × lignes)</label>
+              <label className="block text-sm font-medium">2) Grille</label>
               <div className="grid grid-cols-2 gap-2">
                 <div><span className="text-xs">Largeur : {W}</span><input type="range" min={24} max={128} step={1} value={W} onChange={(e)=>setW(parseInt(e.target.value,10))} className="w-full"/></div>
                 <div><span className="text-xs">Hauteur : {H}</span><input type="range" min={24} max={128} step={1} value={H} onChange={(e)=>setH(parseInt(e.target.value,10))} className="w-full"/></div>
@@ -650,7 +528,6 @@ export default function App(){
               </div>
             </div>
 
-            {/* 3) Palette */}
             <div className="space-y-2 pt-2 border-t">
               <label className="text-sm font-medium">3) Palette & transparents</label>
               <label className="text-sm flex items-center gap-2"><input type="radio" name="src" checked={useSupplier} onChange={()=>setUseSupplier(true)}/>Palette fournisseur (99)</label>
@@ -658,14 +535,12 @@ export default function App(){
               <div className="ml-6 flex items-center gap-2"><input id="trans" type="checkbox" checked={inclTrans} onChange={(e)=>setInclTrans(e.target.checked)}/><label htmlFor="trans" className="text-sm">Inclure les transparentes</label></div>
             </div>
 
-            {/* 4) Numéros */}
             <div className="space-y-2 pt-2 border-t">
               <label className="text-sm font-medium">4) Numéros imprimés</label>
               <label className="text-sm flex items-center gap-2"><input type="radio" name="code" checked={codeMode==="BL"} onChange={()=>setCodeMode("BL")}/>Codes BrickLink</label>
               <label className="text-sm flex items-center gap-2"><input type="radio" name="code" checked={codeMode==="SUP"} onChange={()=>setCodeMode("SUP")}/>Codes Fournisseur (#01→#99)</label>
             </div>
 
-            {/* 5) Dithering */}
             <div className="space-y-2 pt-2 border-t">
               <label className="text-sm font-medium">5) Dithering & anti-bruit</label>
               <div className="grid grid-cols-2 gap-2">
@@ -679,7 +554,6 @@ export default function App(){
               <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={antiSingleton} onChange={(e)=>setAntiSingleton(e.target.checked)}/>Anti-singleton</label>
             </div>
 
-            {/* 6) Ajustements */}
             <div className="space-y-2 pt-2 border-t">
               <label className="text-sm font-medium">6) Ajustements d’image</label>
               <div><span className="text-xs">Lumière : {bright}</span><input type="range" min={-100} max={100} step={1} value={bright} onChange={(e)=>setBright(parseInt(e.target.value,10))} className="w-full"/></div>
@@ -689,54 +563,22 @@ export default function App(){
               <div><span className="text-xs">Netteté : {sharpen}%</span><input type="range" min={0} max={100} step={1} value={sharpen} onChange={(e)=>setSharpen(parseInt(e.target.value,10))} className="w-full"/></div>
             </div>
 
-            {/* 7) Stock */}
-            <div className="space-y-2 pt-2 border-t">
-              <label className="text-sm font-medium">7) Contraintes de stock</label>
-              <label className="text-sm flex items-center gap-2"><input type="checkbox" checked={stockEnabled} onChange={(e)=>setStockEnabled(e.target.checked)}/>Activer les contraintes</label>
-              <div className="flex gap-2">
-                <button className="px-2 py-1 border rounded text-xs" onClick={()=>{ const next={...stockMap}; counts.forEach(([name,qty])=>{ next[name]=qty; }); setStockMap(next); }}>Remplir avec les quantités utilisées</button>
-                <button className="px-2 py-1 border rounded text-xs" onClick={()=>setStockMap({})}>Tout vider (illimité)</button>
-              </div>
-              <div className="text-xs opacity-70">Laissez vide = illimité. Saisissez un nombre pour limiter.</div>
-              <div className="max-h-60 overflow-auto border rounded p-2">
-                <table className="w-full text-xs">
-                  <thead><tr className="text-left"><th>Couleur</th><th>BL</th><th>#</th><th>Dispo</th><th>Utilisé</th></tr></thead>
-                  <tbody>
-                    {paletteUISorted.map(p=>{
-                      const label=p[0], codeBL=p[2], codeSUP=p?.[4]?.supplierCode ?? null;
-                      const used=(counts.find(([n])=>n===label)||[0,0])[1];
-                      return (
-                        <tr key={label}>
-                          <td>{label}</td><td>[{codeBL}]</td><td>{codeSUP!=null?`#${String(codeSUP).padStart(2,"0")}`:""}</td>
-                          <td><input type="number" className="w-24 border rounded px-1 py-0.5" placeholder="illimité" value={stockMap[label] ?? ""} onChange={(e)=>{ const v=e.target.value; setStockMap(s=>({...s,[label]:v})); }}/></td>
-                          <td>{used}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-              {stockNote && <div className={`text-xs mt-1 ${/satisfaites/.test(stockNote)?"text-green-700":"text-amber-700"}`}>{stockNote}</div>}
-            </div>
-
-            {/* actions */}
             <div className="pt-2 border-t space-y-2">
               <button className="w-full bg-black text-white rounded-xl py-2" onClick={processImage} disabled={!images.length}>Générer l’aperçu (worker)</button>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
-                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV</button>
-                <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (numéros + mini-légende)</button>
-                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende finale – verticale)</button>
-                <button onClick={exportPDF_Guide} className="px-3 py-2 rounded-xl border col-span-2">PDF Guide des réglages</button>
+                <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV (avec poids)</button>
+                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende verticale + poids)</button>
               </div>
             </div>
           </div>
 
-          {/* aperçu */}
+          {/* Aperçu */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
             <div className="overflow-auto w-full border rounded-xl">
               <canvas ref={mosaicRef} className="w-full h-auto"/>
             </div>
+
             <div>
               <h3 className="font-semibold mb-2">Palette (tri par # fournisseur) — {inclTrans?"avec":"sans"} transparentes — Numéros: {codeMode==="SUP"?"Fournisseur":"BrickLink"}</h3>
               <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -748,7 +590,7 @@ export default function App(){
                       <div className="w-6 h-6 rounded" style={{background:`rgb(${rgb[0]},${rgb[1]},${rgb[2]})`}}/>
                       <div className="flex-1">
                         <div className="flex items-center justify-between text-sm"><span>{label}</span><span className="opacity-70">[{codeBL}] {codeSUP!=null?`#${String(codeSUP).padStart(2,"0")}`:""}</span></div>
-                        <div className="text-xs opacity-60">rgb({rgb.join(",")}) — {qty} pcs · {grams} g</div>
+                        <div className="text-xs opacity-60">{qty} pcs · {grams} g — rgb({rgb.join(",")})</div>
                       </div>
                     </div>
                   );
@@ -759,7 +601,7 @@ export default function App(){
         </div>
 
         <canvas ref={tinyRef} style={{display:"none"}}/>
-        <footer className="text-xs text-neutral-500 text-center pt-4">Aperçu sans numéros. PDF : numéros sur les plots + légende en dernière page (verticale) avec poids par couleur et total.</footer>
+        <footer className="text-xs text-neutral-500 text-center pt-4">PDF Sections : numéros sur les plots + **légende à la fin**, colonne unique, quantité & poids par couleur (0,11 g/part). Poids total affiché.</footer>
       </div>
     </div>
   );

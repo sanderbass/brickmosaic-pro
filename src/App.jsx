@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/* =================== utilitaires généraux =================== */
+/* =================== utilitaires =================== */
 async function saveFile(dataOrUrl, filename) {
   try {
     const mod = await import("file-saver");
@@ -28,11 +28,26 @@ const hexToRgb = (h) => {
 };
 const luminance = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 
+// Poids d’une plate round 1x1
+const GRAM_PER_PART = 0.11;
+
+/* petit hook de “debounce” pour l’aperçu */
+function useDebouncedEffect(fn, deps, delay = 250) {
+  const t = useRef(null);
+  useEffect(() => {
+    clearTimeout(t.current);
+    t.current = setTimeout(fn, delay);
+    return () => clearTimeout(t.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+}
+
 /* =================== palettes =================== */
+// BrickLink (référence)
 const BL = [
   ["White", "#F2F3F2", 1, false], ["Black", "#000000", 26, false],
   ["Very Light Gray", "#E6E6E6", 49, false], ["Light Gray", "#9BA19D", 9, false],
-  ["Light Bluish Gray", "#A3A2A4", 86, false], ["Dark Bluish Gray", "#6D6E5C", 85, false],
+  ["Light Bluish Gray", "#A3A24", 86, false], ["Dark Bluish Gray", "#6D6E5C", 85, false],
   ["Red", "#C91A09", 5, false], ["Dark Red", "#720E0F", 59, false],
   ["Orange", "#F08F1C", 4, false], ["Medium Orange", "#F19F4D", 31, false],
   ["Yellow", "#F2CD37", 3, false], ["Bright Light Yellow", "#FFF07A", 103, false],
@@ -63,6 +78,7 @@ const BL = [
   ["Trans-Brown", "#6F4E37", 13, true],
 ];
 
+// Palette fournisseur (codes #01→#99)
 const SUPPLIER = [
   [1,"White","#F2F3F2",false],[2,"Very Light Gray","#E6E6E6",false],[3,"Light Gray","#9BA19D",false],[4,"Medium Gray","#B7B7B7",false],
   [5,"Dark Gray","#6D6E5C",false],[6,"Black","#000000",false],[7,"Light Bluish Gray","#A3A2A4",false],[8,"Dark Bluish Gray","#6D6E5C",false],
@@ -78,14 +94,14 @@ const SUPPLIER = [
   [45,"Lime","#A6CA3A",false],[46,"Olive Green","#808E42",false],[47,"Sand Green","#A3C3A2",false],[48,"Dark Turquoise","#008A8A",false],
   [49,"Bright Green","#4B9F4A",false],[50,"Green","#237841",false],[51,"Dark Green","#184632",false],[52,"Military Green","#5A6B54",false],
   [53,"Light Aqua","#A7DCD6",false],[54,"Coral","#FF6F61",false],
-  // Trans fournisseur
+  // Trans
   [85,"Trans-Black","#635F52",true],[86,"Trans-Brown","#6F4E37",true],[87,"Trans-Purple","#5F2683",true],[88,"Trans-Dark Pink","#C94A83",true],
   [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F08F1C",true],[92,"Trans-Neon Green","#C0FF00",true],
   [93,"Trans-Green","#5AC35E",true],[94,"Trans-Blue","#0094FF",true],[95,"Trans-Light Blue","#A3D2F2",true],[96,"Trans-Red","#DE0000",true],
   [97,"Trans-Yellow","#F5CD2A",true],[98,"Trans-Clear","#E6F2F2",true],[99,"Trans-Medium Blue","#6EC1E4",true],
 ];
 
-/* map fournisseur → BL (pour codes et noms) */
+// corrélation fournisseur → BL
 function correlateSupplierToBL(listSupplier, listBL) {
   const bl = listBL.map(([n, hex, code, t]) => [n, hexToRgb(hex), code, t]);
   return listSupplier.map(([supCode, name, hex, isTrans]) => {
@@ -106,7 +122,7 @@ function correlateSupplierToBL(listSupplier, listBL) {
   });
 }
 
-/* =================== rendu & cadrage =================== */
+/* =================== cadrage =================== */
 function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   const ctx = target.getContext("2d", { willReadFrequently: true });
   target.width = gridW; target.height = gridH;
@@ -122,7 +138,7 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
   ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW, gridH);
 }
 
-/* =================== Worker (OKLab + dithering + stock) =================== */
+/* =================== Worker OKLab + dithering =================== */
 function makeQuantWorker() {
   const code = `
   const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
@@ -169,6 +185,13 @@ function makeQuantWorker() {
       }
     }
   }
+  // Matrice de Bayer 8×8 (centrée)
+  const BAYER8 = [
+    [0,48,12,60,3,51,15,63],[32,16,44,28,35,19,47,31],
+    [8,56,4,52,11,59,7,55],[40,24,36,20,43,27,39,23],
+    [2,50,14,62,1,49,13,61],[34,18,46,30,33,17,45,29],
+    [10,58,6,54,9,57,5,53],[42,26,38,22,41,25,37,21]
+  ].map(r=>r.map(v=>v/64-0.5));
 
   onmessage = (e)=>{
     const { img, W, H, opts, pal, stocks } = e.data;
@@ -177,6 +200,13 @@ function makeQuantWorker() {
     const palRGB = pal.map(p=>p.rgb);
     const palLAB = palRGB.map(([r,g,b])=>rgb2lab(r,g,b));
     const palLen = palLAB.length;
+
+    // pénalité pour couleurs très sombres (moins de "noir")
+    const penalty = new Float32Array(palLen);
+    for (let i=0;i<palLen;i++){
+      const L = palLAB[i][0];
+      penalty[i] = (L < 0.35) ? (0.30 * (0.35 - L) / 0.35) : 0;
+    }
 
     const R=new Float32Array(N), G=new Float32Array(N), B=new Float32Array(N);
     for(let i=0,j=0;i<N;i++,j+=4){ R[i]=img[j]; G[i]=img[j+1]; B[i]=img[j+2]; }
@@ -244,16 +274,18 @@ function makeQuantWorker() {
     let AR=R, AG=G, AB=B;
 
     const cache = new Int16Array(4096); cache.fill(-1);
-    function nearestIndexRGB(r,g,b){
+    function nearestIndexRGB_w(r,g,b){
       const key = ((r>>>4)<<8) | ((g>>>4)<<4) | (b>>>4);
       const cached = cache[key];
       if (cached>=0) return cached;
       const lab = rgb2lab(r,g,b);
+      const wL = 1.15, wC = 0.95;
       let best=-1, bd=1e18;
       for(let i=0;i<palLen;i++){
-        const L=palLAB[i][0]-lab[0], A=palLAB[i][1]-lab[1], Bv=palLAB[i][2]-lab[2];
-        const d = L*L + A*A + Bv*Bv;
-        if (d<bd){bd=d; best=i;}
+        const dL = lab[0]-palLAB[i][0], dA = lab[1]-palLAB[i][1], dB = lab[2]-palLAB[i][2];
+        const d = wL*dL*dL + wC*(dA*dA + dB*dB);
+        const adj = d * (1 + penalty[i]);
+        if (adj<bd){bd=adj; best=i;}
       }
       cache[key]=best;
       return best;
@@ -267,10 +299,23 @@ function makeQuantWorker() {
 
     if (dType==='none' || dAmt===0){
       for(let i=0;i<N;i++){
-        const j = nearestIndexRGB(AR[i]|0, AG[i]|0, AB[i]|0);
+        const j = nearestIndexRGB_w(AR[i]|0, AG[i]|0, AB[i]|0);
         indices[i]=j; counts[j]++;
       }
+    } else if (dType==='bayer') {
+      for(let y=0;y<H;y++){
+        for(let x=0;x<W;x++){
+          const k=y*W+x;
+          const bias = BAYER8[y&7][x&7] * 0.08 * dAmt;
+          const rr = clamp(Math.round(AR[k] + bias*255),0,255);
+          const gg = clamp(Math.round(AG[k] + bias*255),0,255);
+          const bb = clamp(Math.round(AB[k] + bias*255),0,255);
+          const j = nearestIndexRGB_w(rr,gg,bb);
+          indices[k]=j; counts[j]++;
+        }
+      }
     } else {
+      // FS / Atkinson (comme avant)
       const r = new Float32Array(R), g = new Float32Array(G), b = new Float32Array(B);
       AR=r; AG=g; AB=b;
       const push = (x,y, fr,fg,fb, w)=>{
@@ -278,13 +323,12 @@ function makeQuantWorker() {
         const k=(y*W+x);
         r[k]+=fr*w*dAmt; g[k]+=fg*w*dAmt; b[k]+=fb*w*dAmt;
       };
-
       if (dType==='fs'){
         for(let y=0;y<H;y++){
           for(let x=0;x<W;x++){
             const k=y*W+x;
             const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
-            const j = nearestIndexRGB(rr,gg,bb);
+            const j = nearestIndexRGB_w(rr,gg,bb);
             indices[k]=j; counts[j]++;
             const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
             const er=rr-pr, eg=gg-pg, eb=bb-pb;
@@ -299,7 +343,7 @@ function makeQuantWorker() {
           for(let x=0;x<W;x++){
             const k=y*W+x;
             const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
-            const j = nearestIndexRGB(rr,gg,bb);
+            const j = nearestIndexRGB_w(rr,gg,bb);
             indices[k]=j; counts[j]++;
             const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
             const er=(rr-pr)/8, eg=(gg-pg)/8, eb=(bb-pb)/8;
@@ -335,13 +379,11 @@ function makeQuantWorker() {
       indices.set(out);
     }
 
-    // Contraintes de stock
+    // Contraintes stock (identique à avant)
     let stockNote=null;
     if (Array.isArray(stocks)){
       const cap = new Int32Array(palLen);
-      for(let i=0;i<palLen;i++){
-        cap[i] = (stocks[i]==null || stocks[i]<0) ? 2147483647 : stocks[i]|0;
-      }
+      for(let i=0;i<palLen;i++){ cap[i] = (stocks[i]==null || stocks[i]<0) ? 2147483647 : stocks[i]|0; }
       const byColor = Array.from({length: palLen}, ()=>[]);
       for(let k=0;k<N;k++){ byColor[indices[k]].push(k); }
 
@@ -352,7 +394,6 @@ function makeQuantWorker() {
         deficit[i] = d>0 ? d : 0;
         if (deficit[i]>0) unmet += deficit[i];
       }
-
       if (unmet>0){
         function nearestAvail(r,g,b, forbid){
           const lab = rgb2lab(r,g,b);
@@ -398,46 +439,51 @@ function makeQuantWorker() {
   return new Worker(URL.createObjectURL(blob));
 }
 
-/* =================== Légende PDF (tri par # fournisseur) =================== */
+/* =================== Légende PDF (tri par #, une ligne, poids) =================== */
 function addLegendPagesSortedBySupplier(doc, countsList, paletteRef) {
   const pad2 = (n) => String(n).padStart(2, "0");
+
   const items = countsList.map(([name, qty]) => {
     const p = paletteRef.find((q) => q[0] === name) || [];
     const rgb = p[1] || [200, 200, 200];
     const codeBL = p[2] ?? "?";
     const codeSUP = p?.[4]?.supplierCode ?? null;
-    return { name, qty, rgb, codeBL, codeSUP };
+    const grams = qty * GRAM_PER_PART;
+    return { name, qty, grams, rgb, codeBL, codeSUP };
   }).sort((a, b) => ((a.codeSUP ?? 9999) - (b.codeSUP ?? 9999)) || a.name.localeCompare(b.name));
 
   const Wp = doc.internal.pageSize.getWidth();
   const Hp = doc.internal.pageSize.getHeight();
-  const m = 12, sw = 6, rowH = 7, cols = 3;
-  const colW = (Wp - 2 * m) / cols;
+  const m = 12, box = 6, lineGap = 3, wrapW = Wp - 2*m - (box + 4);
 
-  let index = 0;
-  while (index < items.length) {
-    doc.addPage();
-    doc.setTextColor(0, 0, 0);
-    doc.setFontSize(14);
-    doc.text("Légende — tri par code fournisseur (#01→#99)", Wp / 2, m, { align: "center" });
-    doc.setFontSize(10);
+  let y = m + 10, piecesTotal = 0, gramsTotal = 0;
 
-    const usableH = Hp - (m + 8) - m;
-    const rowsPerPage = Math.max(1, Math.floor(usableH / rowH));
+  doc.addPage();
+  doc.setTextColor(0,0,0);
+  doc.setFontSize(14);
+  doc.text("Légende — tri par code fournisseur (#01→#99)", Wp/2, m, {align:"center"});
+  doc.setFontSize(10);
 
-    for (let row = 0; row < rowsPerPage && index < items.length; row++) {
-      for (let c = 0; c < cols && index < items.length; c++) {
-        const it = items[index++];
-        const x = m + c * colW;
-        const y = (m + 8) + (row + 1) * rowH;
+  for (const it of items) {
+    const suf = it.codeSUP != null ? ` (#${pad2(it.codeSUP)})` : "";
+    const label = `[${it.codeBL}] ${it.name}${suf}: ${it.qty} pcs — ${it.grams.toFixed(1)} g`;
 
-        doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
-        doc.rect(x, y - 5, sw, sw, "F"); doc.setDrawColor(0); doc.rect(x, y - 5, sw, sw);
-        const suf = it.codeSUP != null ? ` (#${pad2(it.codeSUP)})` : "";
-        doc.text(`[${it.codeBL}] ${it.name}${suf}: ${it.qty}`, x + sw + 3, y);
-      }
-    }
+    const blockH = Math.max(box, doc.splitTextToSize(label, wrapW).length * 5);
+    if (y + blockH + lineGap > Hp - m) { doc.addPage(); y = m + 2; doc.setFontSize(10); }
+
+    doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]);
+    doc.setDrawColor(0); doc.rect(m, y - box + 4, box, box, "F"); doc.rect(m, y - box + 4, box, box);
+
+    const lines = doc.splitTextToSize(label, wrapW);
+    doc.text(lines, m + box + 4, y + 1);
+
+    y += blockH + lineGap;
+    piecesTotal += it.qty; gramsTotal += it.grams;
   }
+
+  if (y + 10 > Hp - m) { doc.addPage(); y = m + 2; }
+  doc.setFontSize(11);
+  doc.text(`Total : ${piecesTotal} pièces — ${gramsTotal.toFixed(1)} g`, m, y + 6);
 }
 
 /* =================== composant principal =================== */
@@ -469,18 +515,18 @@ export default function App() {
   const [codeMode, setCodeMode] = useState("SUP"); // "BL" | "SUP"
 
   // Dithering & post-traitement
-  const [ditherType, setDitherType] = useState("fs"); // 'none' | 'fs' | 'atk'
-  const [ditherAmt, setDitherAmt] = useState(30);     // %
+  const [ditherType, setDitherType] = useState("bayer"); // 'none' | 'fs' | 'atk' | 'bayer'
+  const [ditherAmt, setDitherAmt] = useState(40);        // %
   const [antiSingleton, setAntiSingleton] = useState(true);
 
-  // Sections (aperçu)
+  // Sections
   const [secCols, setSecCols] = useState(3);
   const [secRows, setSecRows] = useState(4);
   const [showSectionGrid, setShowSectionGrid] = useState(true);
 
   // Stocks
   const [stockEnabled, setStockEnabled] = useState(false);
-  const [stockMap, setStockMap] = useState({}); // { label -> quantité (int) }
+  const [stockMap, setStockMap] = useState({});
   const [stockNote, setStockNote] = useState(null);
 
   // Résultats
@@ -491,6 +537,8 @@ export default function App() {
   const [lastMs, setLastMs] = useState(null);
 
   const totalPieces = W * H;
+  const usedPieces = counts.reduce((s,[,q])=>s+q,0);
+  const totalWeight = (usedPieces * GRAM_PER_PART).toFixed(1);
 
   // Charge images
   useEffect(() => {
@@ -515,7 +563,7 @@ export default function App() {
     return src.filter((p) => (inclTrans ? true : !p[3]));
   }, [useSupplier, inclTrans, PAL_SUPPLIER, PAL_BL]);
 
-  // Palette tri UI par # fournisseur
+  // Palette triée UI (# fournisseur)
   const paletteUISorted = useMemo(() => {
     const copy = [...palette];
     copy.sort((a, b) => {
@@ -526,14 +574,14 @@ export default function App() {
     return copy;
   }, [palette]);
 
-  // Worker persistant
+  // Worker
   const workerRef = useRef(null);
   useEffect(() => {
     workerRef.current = makeQuantWorker();
     return () => { workerRef.current && workerRef.current.terminate(); };
   }, []);
 
-  // Rendu visuel (aperçu sans numéros)
+  // Aperçu (sans numéros) + contours adaptatifs
   function renderFromIndices() {
     if (!indices) return;
     const cell = 14;
@@ -548,7 +596,9 @@ export default function App() {
       const cx = x * cell, cy = y * cell;
       const pad = Math.max(1, Math.floor(cell * 0.12)), rad = (cell - pad * 2) / 2;
       g.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
-      g.strokeStyle = "#111"; g.lineWidth = Math.max(1, Math.floor(cell * 0.06));
+      const lum = (0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]) / 255;
+      g.strokeStyle = lum < 0.45 ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.28)";
+      g.lineWidth = Math.max(1, Math.floor(cell * 0.05));
       g.beginPath(); g.arc(cx + cell / 2, cy + cell / 2, rad, 0, Math.PI * 2); g.fill(); g.stroke();
     }
 
@@ -557,7 +607,7 @@ export default function App() {
     for (let i = 0; i <= W; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, H * cell); g.stroke(); }
     for (let j = 0; j <= H; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(W * cell, j * cell); g.stroke(); }
 
-    // sections (lignes seulement)
+    // sections
     if (showSectionGrid && secCols > 0 && secRows > 0) {
       const sW = Math.floor(W / secCols), sH = Math.floor(H / secRows);
       g.strokeStyle = "#ddd"; g.lineWidth = 4;
@@ -566,28 +616,25 @@ export default function App() {
     }
   }
 
-  // Pipeline principal
+  // Traitement principal
   async function processImage() {
     const img = images[idxImg]; if (!img) return;
     const tiny = tinyRef.current;
     drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
     const id = tiny.getContext("2d").getImageData(0, 0, W, H);
 
-    // stocks alignés à la palette
     let stocksArr = null;
     if (stockEnabled) {
       stocksArr = palette.map((p) => {
         const key = p[0];
         const v = stockMap[key];
-        if (v == null || v === "" || isNaN(v)) return -1; // illimité
+        if (v == null || v === "" || isNaN(v)) return -1;
         return Math.max(-1, parseInt(v, 10));
       });
     }
-
     const palPack = palette.map(p => ({
       rgb: p[1], codeBL: p[2], supplierCode: p?.[4]?.supplierCode ?? null
     }));
-
     const worker = workerRef.current;
     if (!worker) return;
 
@@ -618,7 +665,8 @@ export default function App() {
   }
 
   useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, secCols, secRows, W, H]);
-  useEffect(() => { if (images[idxImg]) processImage(); /* eslint-disable-next-line */ }, [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, ditherType, ditherAmt, antiSingleton, stockEnabled]);
+  useDebouncedEffect(() => { if (images[idxImg]) processImage(); },
+    [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
 
   /* =================== Exports =================== */
   async function exportPNG() {
@@ -645,10 +693,12 @@ export default function App() {
     const list = counts.map(([name, qty]) => {
       const p = palette.find((q) => q[0] === name) || [];
       const codeBL = p[2] ?? "?"; const codeSUP = p?.[4]?.supplierCode ?? null;
-      return `[${codeBL}] ${name}${codeSUP != null ? ` (#${String(codeSUP).padStart(2, "0")})` : ""};${qty}`;
+      const grams = (qty * GRAM_PER_PART).toFixed(1);
+      return `[${codeBL}] ${name}${codeSUP != null ? ` (#${String(codeSUP).padStart(2,"0")})` : ""};${qty};${grams} g`;
     });
-    await saveFile(new Blob([`Code-Name;Qty\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${codeMode}_${W}x${H}.csv`);
+    await saveFile(new Blob([`Code-Name;Qty;Weight(g)\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${codeMode}_${W}x${H}.csv`);
   }
+
   async function exportPDF_A3() {
     if (!indices) await processImage();
     const JsPDF = await getJsPDF(); if (!JsPDF) { alert("jsPDF manquant"); return; }
@@ -693,13 +743,14 @@ export default function App() {
     const items = counts.map(([name, qty]) => {
       const p = palette.find((q) => q[0] === name) || []; const rgb = p[1] || [200, 200, 200];
       const codeBL = p[2] ?? "?"; const codeSUP = p?.[4]?.supplierCode ?? null;
-      return { name, qty, rgb, codeBL, codeSUP };
+      const grams = qty * GRAM_PER_PART;
+      return { name, qty, grams, rgb, codeBL, codeSUP };
     }).sort((a, b) => ((a.codeSUP ?? 9999) - (b.codeSUP ?? 9999)) || a.name.localeCompare(b.name));
     const pad2 = (n) => String(n).padStart(2, "0");
     for (const it of items) {
       doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]); doc.rect(lx, ly, box, box, "F"); doc.setDrawColor(0); doc.rect(lx, ly, box, box);
       const suf = it.codeSUP != null ? ` (#${pad2(it.codeSUP)})` : "";
-      doc.text(`[${it.codeBL}] ${it.name}${suf}: ${it.qty}`, lx + box + 3, ly + 4);
+      doc.text(`[${it.codeBL}] ${it.name}${suf}: ${it.qty} pcs — ${it.grams.toFixed(1)} g`, lx + box + 3, ly + 4);
       ly += box + 3; if (ly > Hp - 14) { doc.addPage(); lx = m; ly = 14; }
     }
 
@@ -745,63 +796,9 @@ export default function App() {
       n++;
     }
 
-    // Légende en dernières pages uniquement
+    // Légende pages finales (une couleur par ligne + poids)
     addLegendPagesSortedBySupplier(doc, counts, palette);
     doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
-  }
-
-  // PDF Guide des réglages
-  async function exportPDF_Guide() {
-    const JsPDF = await getJsPDF(); if (!JsPDF) { alert("jsPDF manquant"); return; }
-    const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const Wp = doc.internal.pageSize.getWidth(), m = 12;
-
-    function title(t, y){ doc.setFontSize(16); doc.text(t, Wp/2, y, {align:"center"}); }
-    function h2(t, y){ doc.setFontSize(13); doc.text(t, m, y); }
-    function p(txt, y){ doc.setFontSize(10); const lines = doc.splitTextToSize(txt, Wp-2*m); doc.text(lines, m, y); return y + lines.length*5 + 2; }
-    function bullet(lines, y){ doc.setFontSize(10); for(const l of lines){ const wrapped = doc.splitTextToSize("• "+l, Wp-2*m); doc.text(wrapped, m, y); y += wrapped.length*5; } return y+2; }
-
-    title("Guide des réglages — BrickMosaic Pro", 18);
-    let y = 28;
-    y = p("Ce guide explique l’impact de chaque réglage sur l’image de votre mosaïque, avec des recommandations pratiques selon le type d’image (portrait, logo, etc.).", y);
-
-    h2("Dithering & Anti-bruit", y+=8);
-    y = bullet([
-      "Dithering (Floyd–Steinberg / Atkinson) : ajoute un grain contrôlé pour simuler des tons intermédiaires avec peu de couleurs.",
-      "Intensité : plus haut = plus de texture, utile pour les dégradés ; trop élevé peut rendre l’image bruitée.",
-      "Atkinson : plus doux et plus propre ; Floyd–Steinberg : plus précis mais plus granuleux.",
-      "Anti-singleton : remplace les plots isolés par la couleur majoritaire voisine pour des surfaces plus homogènes."
-    ], y+4);
-
-    h2("Lumière, Contraste, Saturation", y+=6);
-    y = bullet([
-      "Lumière : éclaircit/assombrit globalement. À utiliser pour retrouver des détails dans les ombres.",
-      "Contraste : accentue l’écart entre sombres et clairs ; attention à l’écrêtage.",
-      "Saturation : renforce/atténue les couleurs. Pour les portraits, restez modéré (+0 à +10%)."
-    ], y+4);
-
-    h2("Gamma", y+=6);
-    y = p("Le Gamma ajuste la courbe tonale (luminosité perçue). < 1.0 assombrit les tons moyens ; > 1.0 les éclaircit. Utile pour adapter une photo trop plate ou trop dure sans détruire les hautes lumières.", y+4);
-
-    h2("Netteté (Unsharp Mask)", y+=6);
-    y = p("Renforce les contours après redimensionnement. Des valeurs entre 30–50% sont recommandées pour des portraits. Pour des logos et aplats, 10–30% suffisent.", y+4);
-
-    doc.addPage();
-    title("Contraintes de stock", 18);
-    y = 28;
-    y = bullet([
-      "Activez ‘Contraintes de stock’ puis saisissez la quantité disponible pour chaque couleur.",
-      "Le moteur réalloue automatiquement les pixels excédentaires vers la couleur disponible la plus proche (en OKLab).",
-      "Si le stock est insuffisant pour certaines teintes, un message le signale ; pensez à ajuster la palette ou les réglages."
-    ], y);
-    h2("Conseils rapides", y+=6);
-    y = bullet([
-      "Portrait : Dithering FS 20–30%, Anti-singleton ON, Gamma 1.05–1.15, Netteté 35–50%.",
-      "Logo : Dithering OFF, Anti-singleton OFF, Contraste léger, Netteté 15–30%.",
-      "Photos sombres : augmentez Gamma (1.1–1.3) et un peu la Lumière (+5 à +10)."
-    ], y+4);
-
-    doc.save("Guide_BrickMosaic_Pro.pdf");
   }
 
   /* =================== UI =================== */
@@ -844,8 +841,8 @@ export default function App() {
                 </div>
               </div>
               <div className="text-sm mt-1">
-                <strong>Total pièces :</strong> {(totalPieces).toLocaleString("fr-FR")}
-                {counts.length>0 && <> — <strong>Couleurs utilisées :</strong> {counts.length}</>}
+                <strong>Total pièces :</strong> {totalPieces.toLocaleString("fr-FR")}
+                {counts.length>0 && <> — <strong>Utilisées :</strong> {usedPieces.toLocaleString("fr-FR")} — <strong>Poids :</strong> {totalWeight} g</>}
               </div>
             </div>
 
@@ -885,6 +882,7 @@ export default function App() {
               <label className="text-sm font-medium">5) Dithering & anti-bruit</label>
               <div className="grid grid-cols-2 gap-2">
                 <select className="border rounded px-2 py-1" value={ditherType} onChange={(e)=>setDitherType(e.target.value)}>
+                  <option value="bayer">Bayer (ordonné)</option>
                   <option value="fs">Floyd–Steinberg</option>
                   <option value="atk">Atkinson</option>
                   <option value="none">Aucun</option>
@@ -920,11 +918,11 @@ export default function App() {
               </div>
               <div className="flex gap-2">
                 <button className="px-2 py-1 border rounded" onClick={()=>{
-                  setGamma(1.1); setBright(4); setContrast(10); setSaturation(5); setSharpen(45);
-                  setDitherType("fs"); setDitherAmt(25); setAntiSingleton(true); setUseSupplier(true);
+                  setGamma(1.12); setBright(5); setContrast(10); setSaturation(6); setSharpen(45);
+                  setDitherType("bayer"); setDitherAmt(40); setAntiSingleton(true); setUseSupplier(true);
                 }}>Preset Portrait</button>
                 <button className="px-2 py-1 border rounded" onClick={()=>{
-                  setGamma(1.0); setBright(0); setContrast(8); setSaturation(0); setSharpen(30);
+                  setGamma(1.0); setBright(0); setContrast(8); setSaturation(0); setSharpen(28);
                   setDitherType("none"); setDitherAmt(0); setAntiSingleton(false);
                 }}>Preset Logo</button>
               </div>
@@ -946,7 +944,7 @@ export default function App() {
                 <button className="px-2 py-1 border rounded text-xs" onClick={()=>setStockMap({})}>Tout vider (illimité)</button>
               </div>
               <div className="text-xs opacity-70">
-                Laissez vide pour “illimité”. Saisissez un nombre pour limiter la quantité disponible d’une couleur.
+                Vide = “illimité”. Saisissez un nombre pour limiter la quantité disponible d’une couleur.
               </div>
               <div className="max-h-60 overflow-auto border rounded p-2">
                 <table className="w-full text-xs">
@@ -993,8 +991,7 @@ export default function App() {
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
                 <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV</button>
                 <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (numéros + mini-légende)</button>
-                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende en dernière page)</button>
-                <button onClick={exportPDF_Guide} className="px-3 py-2 rounded-xl border col-span-2">PDF Guide des réglages</button>
+                <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende finale)</button>
               </div>
             </div>
           </div>
@@ -1034,7 +1031,7 @@ export default function App() {
 
         <canvas ref={tinyRef} style={{ display: "none" }} />
         <footer className="text-xs text-neutral-500 text-center pt-4">
-          Aperçu sans numéros. PDF : numéros sur les tenons + légende uniquement en dernières pages (tri par #). Contraintes de stock disponibles.
+          Aperçu sans numéros. PDF : numéros sur les tenons + légende uniquement en dernières pages (tri par #, poids inclus).
         </footer>
       </div>
     </div>

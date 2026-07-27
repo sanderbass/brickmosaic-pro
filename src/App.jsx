@@ -34,6 +34,11 @@ const GRAM_PER_PART = 0.11;
 // taille d'une brique en pixels dans le PNG exporte (apercu client)
 const PNG_CELL = 24;
 
+// Contrainte physique : les plaques de fond font 16 x 16 tenons.
+const PLATE = 16;          // tenons par cote de plaque
+const STUD_MM = 8;         // pas d'un tenon, en millimetres
+const PLATE_MM = PLATE * STUD_MM;  // 128 mm de cote
+
 /* petit hook de “debounce” pour l’aperçu */
 function useDebouncedEffect(fn, deps, delay = 250) {
   const t = useRef(null);
@@ -476,7 +481,7 @@ function makeQuantWorker() {
 }
 
 /* =================== Légende PDF (tri par #, une ligne, poids) =================== */
-function addLegendPagesSortedBySupplier(doc, countsList, paletteRef) {
+function addLegendPagesSortedBySupplier(doc, countsList, paletteRef, plateCount) {
   const pad2 = (n) => String(n).padStart(2, "0");
 
   const items = countsList.map(([name, qty]) => {
@@ -497,11 +502,12 @@ function addLegendPagesSortedBySupplier(doc, countsList, paletteRef) {
   doc.addPage();
   doc.setTextColor(0,0,0);
   doc.setFontSize(14);
-  doc.text("Légende — tri par code fournisseur (#01→#99)", Wp/2, m, {align:"center"});
+  doc.text("Légende — tri par code fournisseur (#01 a #99)", Wp/2, m, {align:"center"});
   doc.setFontSize(10);
 
   for (const it of items) {
-    const suf = it.codeSUP != null ? ` (#${pad2(it.codeSUP)})` : "";
+    const tag = it.codeSUP != null ? `(#${pad2(it.codeSUP)})` : "";
+    const suf = (tag && it.name.indexOf(tag) === -1) ? ` ${tag}` : "";
     const label = `[${it.codeBL}] ${it.name}${suf}: ${it.qty} pcs — ${it.grams.toFixed(1)} g`;
 
     const blockH = Math.max(box, doc.splitTextToSize(label, wrapW).length * 5);
@@ -517,9 +523,10 @@ function addLegendPagesSortedBySupplier(doc, countsList, paletteRef) {
     piecesTotal += it.qty; gramsTotal += it.grams;
   }
 
-  if (y + 10 > Hp - m) { doc.addPage(); y = m + 2; }
+  if (y + 16 > Hp - m) { doc.addPage(); y = m + 2; }
   doc.setFontSize(11);
   doc.text(`Total : ${piecesTotal} pièces — ${gramsTotal.toFixed(1)} g`, m, y + 6);
+  doc.text(`Plaques de fond 16x16 necessaires : ${plateCount}`, m, y + 12);
 }
 
 /* =================== composant principal =================== */
@@ -558,8 +565,6 @@ export default function App() {
   const [antiSingleton, setAntiSingleton] = useState(true);
 
   // Sections
-  const [secCols, setSecCols] = useState(3);
-  const [secRows, setSecRows] = useState(4);
   const [showSectionGrid, setShowSectionGrid] = useState(true);
 
   // Stocks
@@ -575,6 +580,10 @@ export default function App() {
   // dimensions de grille ayant reellement produit "indices"
   const [gridDims, setGridDims] = useState(null);
   const [lastMs, setLastMs] = useState(null);
+
+  // decoupe en plaques 16 x 16, derivee des dimensions
+  const plateCols = Math.max(1, Math.round(W / PLATE));
+  const plateRows = Math.max(1, Math.round(H / PLATE));
 
   const totalPieces = W * H;
   const usedPieces = counts.reduce((s,[,q])=>s+q,0);
@@ -650,11 +659,14 @@ export default function App() {
     for (let j = 0; j <= gh; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(gw * cell, j * cell); g.stroke(); }
 
     // sections
-    if (sections && secCols > 0 && secRows > 0) {
-      const sW = Math.floor(gw / secCols), sH = Math.floor(gh / secRows);
+    if (sections) {
       g.strokeStyle = "#ddd"; g.lineWidth = 4;
-      for (let c = 1; c < secCols; c++) { const x = c * sW * cell; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, gh * cell); g.stroke(); }
-      for (let r = 1; r < secRows; r++) { const y = r * sH * cell; g.beginPath(); g.moveTo(0, y); g.lineTo(gw * cell, y); g.stroke(); }
+      for (let x = PLATE; x < gw; x += PLATE) {
+        g.beginPath(); g.moveTo(x*cell, 0); g.lineTo(x*cell, gh*cell); g.stroke();
+      }
+      for (let y = PLATE; y < gh; y += PLATE) {
+        g.beginPath(); g.moveTo(0, y*cell); g.lineTo(gw*cell, y*cell); g.stroke();
+      }
     }
   }
 
@@ -663,6 +675,7 @@ export default function App() {
     if (!indices || !gridDims) return;
     if (gridDims.w !== W || gridDims.h !== H) return;
     if (indices.length !== W * H) return;
+    if (gridDims.pal !== palette) return;
     drawMosaicTo(mosaicRef.current, indices, W, H, 14, showSectionGrid);
   }
 
@@ -708,7 +721,7 @@ export default function App() {
     countsArray.sort((a, b) => b[1] - a[1]);
 
     setIndices(result.indices);
-    setGridDims({ w: W, h: H });
+    setGridDims({ w: W, h: H, pal: palette });
     setCounts(countsArray);
     setLastMs(Math.round(t1 - t0));
     setStockNote(result.stockNote || null);
@@ -716,7 +729,7 @@ export default function App() {
     return { indices: result.indices, counts: countsArray };
   }
 
-  useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, secCols, secRows, W, H]);
+  useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, W, H]);
   useDebouncedEffect(() => { if (images[idxImg]) processImage(); },
     [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, darkPenalty, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
 
@@ -726,7 +739,8 @@ export default function App() {
   async function ensureGrid() {
     const fresh = indices && gridDims
       && gridDims.w === W && gridDims.h === H
-      && indices.length === W * H;
+      && indices.length === W * H
+      && gridDims.pal === palette;
     if (fresh) return { indices, counts };
     return await processImage();
   }
@@ -821,7 +835,8 @@ export default function App() {
     const pad2 = (n) => String(n).padStart(2, "0");
     for (const it of items) {
       doc.setFillColor(it.rgb[0], it.rgb[1], it.rgb[2]); doc.rect(lx, ly, box, box, "F"); doc.setDrawColor(0); doc.rect(lx, ly, box, box);
-      const suf = it.codeSUP != null ? ` (#${pad2(it.codeSUP)})` : "";
+      const tag = it.codeSUP != null ? `(#${pad2(it.codeSUP)})` : "";
+      const suf = (tag && it.name.indexOf(tag) === -1) ? ` ${tag}` : "";
       doc.text(`[${it.codeBL}] ${it.name}${suf}: ${it.qty} pcs — ${it.grams.toFixed(1)} g`, lx + box + 3, ly + 4);
       ly += box + 3; if (ly > Hp - 14) { doc.addPage(); lx = m; ly = 14; }
     }
@@ -836,22 +851,24 @@ export default function App() {
     const gridCounts = grid.counts;
     const JsPDF = await getJsPDF(); if (!JsPDF) { alert("jsPDF manquant"); return; }
     const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight();
-    const m = 10, uW = Wp - 2 * m, uH = Hp - 2 * m - 10;
-    const sW = Math.floor(W / secCols) || W, sH = Math.floor(H / secRows) || H;
-    const cell = Math.min(uW / sW, uH / sH);
+    const Wp = doc.internal.pageSize.getWidth();
+    const m = 10;
+    // taille de case fixe : impression a l'echelle reelle
+    const cell = STUD_MM;                 // 8 mm par tenon
+    const board = PLATE_MM;               // 128 mm de cote
+    const ox = (Wp - board) / 2;          // plateau centre horizontalement
+    const oy = 20;                        // juste sous le titre
 
     let n = 1, first = true;
-    for (let r = 0; r < secRows; r++) for (let c = 0; c < secCols; c++) {
+    for (let pr = 0; pr < plateRows; pr++) for (let pc = 0; pc < plateCols; pc++) {
+      const x0 = pc * PLATE, y0 = pr * PLATE;
       if (!first) doc.addPage(); first = false;
-      doc.setFontSize(16); doc.text(`Section ${n}`, Wp / 2, 10, { align: "center" });
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(16);
+      doc.text(`Plaque ${n}/${plateCols*plateRows} - colonne ${pc+1}, ligne ${pr+1}`, Wp / 2, 12, { align: "center" });
 
-      const boardW = sW * cell, boardH = sH * cell;
-      const ox = m + (uW - boardW) / 2, oy = m + 10 + (uH - boardH) / 2;
-
-      for (let y = 0; y < sH; y++) for (let x = 0; x < sW; x++) {
-        const gx = c * sW + x, gy = r * sH + y; if (gx >= W || gy >= H) continue;
-        const idp = gridIdx[gy * W + gx];
+      for (let y = 0; y < PLATE; y++) for (let x = 0; x < PLATE; x++) {
+        const idp = gridIdx[(y0 + y) * W + (x0 + x)];
         const entry = palette[idp]; const [, rgb] = entry;
         const codeBL = entry[2]; const codeSUP = entry?.[4]?.supplierCode ?? codeBL;
         const code = codeMode === "SUP" ? codeSUP : codeBL;
@@ -864,16 +881,25 @@ export default function App() {
       }
 
       doc.setDrawColor(180); doc.setLineWidth(0.1);
-      for (let i = 0; i <= sW; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + cell * sH); }
-      for (let j = 0; j <= sH; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * sW, y); }
-      doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox, oy, cell * sW, cell * sH);
+      for (let i = 0; i <= PLATE; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + board); }
+      for (let j = 0; j <= PLATE; j++) { const y = oy + j * cell; doc.line(ox, y, ox + board, y); }
+      doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox, oy, board, board);
+
+      // Controle d'echelle : trait de reference de 100 mm exactement
+      const ctrlY = oy + board + 18;
+      const cx0 = (Wp - 100) / 2;
+      doc.setDrawColor(0); doc.setLineWidth(0.3);
+      doc.line(cx0, ctrlY, cx0 + 100, ctrlY);
+      doc.setTextColor(0, 0, 0); doc.setFontSize(9);
+      doc.text("Echelle 1:1 - ce trait doit mesurer 100 mm. Imprimer a 100%, sans ajustement a la page.", Wp / 2, ctrlY + 7, { align: "center" });
+      doc.text("Poser la plaque 16x16 sur le plateau ci-dessus pour placer les briques.", Wp / 2, ctrlY + 13, { align: "center" });
 
       n++;
     }
 
     // Légende pages finales (une couleur par ligne + poids)
-    addLegendPagesSortedBySupplier(doc, gridCounts, palette);
-    doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
+    addLegendPagesSortedBySupplier(doc, gridCounts, palette, plateCols * plateRows);
+    doc.save(`plaques_${plateCols}x${plateRows}_${codeMode}_${W}x${H}.pdf`);
   }
 
   /* =================== UI =================== */
@@ -908,13 +934,20 @@ export default function App() {
             <div className="space-y-2">
               <label className="block text-sm font-medium">2) Grille (colonnes × lignes)</label>
               <div className="grid grid-cols-2 gap-2">
-                <div><span className="text-xs">Largeur : {W}</span>
-                  <input type="range" min={24} max={128} step={1} value={W} onChange={(e)=>setW(parseInt(e.target.value,10))} className="w-full" />
+                <div><span className="text-xs">Largeur : {W} tenons ({plateCols} plaques)</span>
+                  <input type="range" min={PLATE} max={128} step={PLATE} value={W} onChange={(e)=>setW(parseInt(e.target.value,10))} className="w-full" />
                 </div>
-                <div><span className="text-xs">Hauteur : {H}</span>
-                  <input type="range" min={24} max={128} step={1} value={H} onChange={(e)=>setH(parseInt(e.target.value,10))} className="w-full" />
+                <div><span className="text-xs">Hauteur : {H} tenons ({plateRows} plaques)</span>
+                  <input type="range" min={PLATE} max={128} step={PLATE} value={H} onChange={(e)=>setH(parseInt(e.target.value,10))} className="w-full" />
                 </div>
               </div>
+              <div className="text-xs opacity-70">
+                {plateCols*plateRows} plaques ({plateCols} x {plateRows}) - {(W*STUD_MM/10).toFixed(1)} x {(H*STUD_MM/10).toFixed(1)} cm - {W*H} tenons
+              </div>
+              <label className="text-sm flex items-center gap-2">
+                <input type="checkbox" checked={showSectionGrid} onChange={(e)=>setShowSectionGrid(e.target.checked)} />
+                Afficher la separation des plaques
+              </label>
               <div className="text-sm mt-1">
                 <strong>Total pièces :</strong> {totalPieces.toLocaleString("fr-FR")}
                 {counts.length>0 && <> — <strong>Utilisées :</strong> {usedPieces.toLocaleString("fr-FR")} — <strong>Poids :</strong> {totalWeight} g</>}

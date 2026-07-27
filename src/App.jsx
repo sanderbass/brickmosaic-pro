@@ -131,8 +131,31 @@ function correlateSupplierToBL(listSupplier, listBL) {
 }
 
 /* =================== cadrage =================== */
-function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy, maxS) {
+function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy, maxS, bgColor, mode) {
   const ctx = target.getContext("2d", { willReadFrequently: true });
+  const bg = bgColor || "#FFFFFF";
+  const cap = (maxS === undefined || maxS === null) ? 4 : maxS;
+
+  if (mode === "contenir") {
+    // pas de bridage a 1 : le curseur peut dezoomer
+    const z = Math.max(0.01, zoom);
+    // S borne par la resolution reellement dispo, comme en mode remplir,
+    // mais sur les dimensions de l'image entiere puisqu'on ne rogne pas
+    const S = Math.max(1, Math.min(cap,
+                Math.floor(Math.min(img.width / gridW, img.height / gridH))));
+    target.width = gridW * S; target.height = gridH * S;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, target.width, target.height);
+    const k = Math.min((gridW*S) / img.width, (gridH*S) / img.height) / z;
+    const dw = Math.round(img.width * k), dh = Math.round(img.height * k);
+    const px = Math.round((gridW*S - dw)/2 + dx * (gridW*S - dw)/2);
+    const py = Math.round((gridH*S - dh)/2 + dy * (gridH*S - dh)/2);
+    ctx.drawImage(img, 0, 0, img.width, img.height, px, py, dw, dh);
+    return S;
+  }
+
   const aspect = gridW / gridH, z = Math.max(1, zoom);
   let vw = img.width / z, vh = vw / aspect;
   if (vh > img.height / z) { vh = img.height / z; vw = vh * aspect; }
@@ -140,13 +163,13 @@ function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy, maxS) {
   const sx = clamp(img.width / 2 - vw / 2 + dx * maxX, 0, maxX);
   const sy = clamp(img.height / 2 - vh / 2 + dy * maxY, 0, maxY);
   // facteur de surechantillonnage, borne par la resolution reellement dispo
-  const cap = (maxS === undefined || maxS === null) ? 4 : maxS;
   const S = Math.max(1, Math.min(cap,
               Math.floor(Math.min(vw / gridW, vh / gridH))));
   target.width = gridW * S; target.height = gridH * S;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.clearRect(0, 0, gridW * S, gridH * S);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, target.width, target.height);
   ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW * S, gridH * S);
   return S;
 }
@@ -567,6 +590,10 @@ export default function App() {
   const [zoom, setZoom] = useState(1.15);
   const [offX, setOffX] = useState(0);
   const [offY, setOffY] = useState(0);
+  // fond applique aux zones transparentes des images detourees
+  const [bgColor, setBgColor] = useState("#FFFFFF");
+  // "remplir" (rogne les bords) ou "contenir" (image entiere + fond)
+  const [cadrage, setCadrage] = useState("remplir");
 
   // Ajustements
   const [bright, setBright] = useState(0);
@@ -605,6 +632,37 @@ export default function App() {
   const [lastMs, setLastMs] = useState(null);
   // part de pastilles orphelines : conseil sur l'adequation image / grille
   const [orphanPct, setOrphanPct] = useState(null);
+
+  // Grille suggeree : multiples de 16 dont le rapport colle au format de
+  // l'image, a nombre de tenons voisin de la grille courante.
+  const gridSuggestion = useMemo(() => {
+    const im = images[idxImg];
+    if (!im || !im.width || !im.height) return null;
+    const ratio = im.width / im.height;
+    const target = W * H;
+    const all = [];
+    for (let a = PLATE; a <= 128; a += PLATE) {
+      for (let b = PLATE; b <= 128; b += PLATE) {
+        all.push({ a, b, err: Math.abs(Math.log((a / b) / ratio)) });
+      }
+    }
+    // Un ecart de rapport de 10 % est invisible sur une mosaique, un facteur
+    // trois sur le nombre de plaques ne l'est pas : on tolere puis on choisit
+    // la grille la plus proche de la courante en nombre de tenons.
+    const errMin = Math.min(...all.map((c) => c.err));
+    const seuil = Math.max(errMin + 0.02, 0.10);
+    let best = null;
+    for (const c of all) {
+      if (c.err > seuil) continue;
+      const ds = Math.abs(c.a * c.b - target);
+      if (!best || ds < best.ds || (ds === best.ds && c.err < best.err)) best = { ...c, ds };
+    }
+    return {
+      w: im.width, h: im.height, a: best.a, b: best.b,
+      plaques: (best.a / PLATE) * (best.b / PLATE),
+      cmW: best.a * STUD_MM / 10, cmH: best.b * STUD_MM / 10,
+    };
+  }, [images, idxImg, W, H]);
 
   // decoupe en plaques 16 x 16, derivee des dimensions
   const plateCols = Math.max(1, Math.round(W / PLATE));
@@ -708,7 +766,7 @@ export default function App() {
   async function processImage() {
     const img = images[idxImg]; if (!img) return null;
     const tiny = tinyRef.current;
-    const S = drawCroppedToRect(img, tiny, W, H, zoom, offX, offY, 4);
+    const S = drawCroppedToRect(img, tiny, W, H, zoom, offX, offY, 4, bgColor, cadrage);
     const id = tiny.getContext("2d").getImageData(0, 0, W * S, H * S);
 
     let stocksArr = null;
@@ -757,7 +815,7 @@ export default function App() {
 
   useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, W, H]);
   useDebouncedEffect(() => { if (images[idxImg]) processImage(); },
-    [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, darkPenalty, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
+    [images, idxImg, W, H, zoom, offX, offY, bgColor, cadrage, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, darkPenalty, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
 
   /* =================== Exports =================== */
   // Renvoie des donnees garanties coherentes avec W/H courants,
@@ -954,6 +1012,11 @@ export default function App() {
                   </select>
                 </div>
               )}
+              <div className="flex items-center gap-2 mt-2">
+                <label htmlFor="bg" className="text-sm">Fond des zones transparentes</label>
+                <input id="bg" type="color" value={bgColor} onChange={(e)=>setBgColor(e.target.value)} />
+                <span className="text-xs opacity-60">S'applique aux images detourees (PNG, WebP, AVIF).</span>
+              </div>
             </div>
 
             {/* 2) Grille */}
@@ -986,6 +1049,36 @@ export default function App() {
                   )}
                 </>
               )}
+              {gridSuggestion && (
+                <div className="text-xs opacity-70 flex items-center gap-2 flex-wrap">
+                  <span>
+                    Format de l'image : {gridSuggestion.w} x {gridSuggestion.h}. Grille la plus proche : {gridSuggestion.a} x {gridSuggestion.b} ({gridSuggestion.plaques} plaques, {gridSuggestion.cmW.toFixed(1)} x {gridSuggestion.cmH.toFixed(1)} cm).
+                  </span>
+                  <button
+                    className="px-2 py-0.5 border rounded"
+                    onClick={()=>{ setW(gridSuggestion.a); setH(gridSuggestion.b); }}
+                    disabled={W===gridSuggestion.a && H===gridSuggestion.b}
+                  >Appliquer</button>
+                </div>
+              )}
+              <div className="space-y-1">
+                <label className="text-sm flex items-center gap-2">
+                  <input type="radio" name="cadrage" checked={cadrage==="remplir"} onChange={()=>{ setCadrage("remplir"); setZoom(1.15); }} />
+                  Remplir la grille (rogne les bords)
+                </label>
+                <label className="text-sm flex items-center gap-2">
+                  <input type="radio" name="cadrage" checked={cadrage==="contenir"} onChange={()=>{ setCadrage("contenir"); setZoom(1.00); }} />
+                  Contenir l'image entiere (ajoute du fond)
+                </label>
+                <div><span className="text-xs">Zoom : {zoom.toFixed(2)}</span>
+                  <input type="range" min={0.5} max={3} step={0.05} value={zoom} onChange={(e)=>setZoom(parseFloat(e.target.value))} className="w-full" />
+                </div>
+                <div className="text-xs opacity-60">
+                  {cadrage==="contenir"
+                    ? "En mode contenir : 1.00 ajuste l'image au cadre, au-dela elle est reduite et le fond apparait."
+                    : "En mode remplir : les valeurs sous 1.00 sont sans effet, le cadre est toujours entierement couvert."}
+                </div>
+              </div>
               <label className="text-sm flex items-center gap-2">
                 <input type="checkbox" checked={showSectionGrid} onChange={(e)=>setShowSectionGrid(e.target.checked)} />
                 Afficher la separation des plaques

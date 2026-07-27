@@ -309,6 +309,28 @@ function makeQuantWorker() {
       R[i]=r; G[i]=g; B[i]=b;
     }
 
+    // Part de pastilles orphelines : aucune voisine perceptivement proche.
+    // Mesure le mouchetage, c'est-a-dire l'illisibilite de la mosaique.
+    const ORPHAN_SEUIL = 84;   // somme |dR|+|dG|+|dB| en deca de laquelle
+                               // deux pastilles sont jugees proches
+    let orphans = 0;
+    for(let y=0;y<H;y++){
+      for(let x=0;x<W;x++){
+        const k=y*W+x;
+        let mini = 1e9;
+        const vois = [[1,0],[-1,0],[0,1],[0,-1]];
+        for(let v=0;v<4;v++){
+          const xx=x+vois[v][0], yy=y+vois[v][1];
+          if (xx<0||yy<0||xx>=W||yy>=H) continue;
+          const kk=yy*W+xx;
+          const d = Math.abs(R[k]-R[kk]) + Math.abs(G[k]-G[kk]) + Math.abs(B[k]-B[kk]);
+          if (d < mini) mini = d;
+        }
+        if (mini > ORPHAN_SEUIL) orphans++;
+      }
+    }
+    const orphanPct = 100 * orphans / N;
+
     let AR=R, AG=G, AB=B;
 
     function nearestIndexRGB_w(r,g,b){
@@ -409,9 +431,10 @@ function makeQuantWorker() {
             if (xx<0||yy<0||xx>=W||yy>=H) continue;
             const vv=indices[idx(xx,yy)]; if (vv===v) same++; nb.push(vv);
           }
-          if (same<=1 && nb.length){
+          if (same===0 && nb.length){
             const hist=new Map(); let bestv=v, bestc=0;
             for(const t of nb){ const c=(hist.get(t)||0)+1; hist.set(t,c); if(c>bestc){bestc=c;bestv=t;} }
+            if (bestc < 2) continue;
             out[k]=bestv;
           }
         }
@@ -474,7 +497,7 @@ function makeQuantWorker() {
     const finalCounts = new Int32Array(palLen);
     for(let i=0;i<N;i++){ finalCounts[indices[i]]++; }
 
-    postMessage({ indices, counts: finalCounts, stockNote });
+    postMessage({ indices, counts: finalCounts, stockNote, orphanPct });
   };`;
   const blob = new Blob([code], { type: "application/javascript" });
   return new Worker(URL.createObjectURL(blob));
@@ -556,7 +579,7 @@ export default function App() {
 
   // Palette & numérotation
   const [useSupplier, setUseSupplier] = useState(true);
-  const [inclTrans, setInclTrans] = useState(true);
+  const [inclTrans, setInclTrans] = useState(false);
   const [codeMode, setCodeMode] = useState("SUP"); // "BL" | "SUP"
 
   // Dithering & post-traitement
@@ -580,6 +603,8 @@ export default function App() {
   // dimensions de grille ayant reellement produit "indices"
   const [gridDims, setGridDims] = useState(null);
   const [lastMs, setLastMs] = useState(null);
+  // part de pastilles orphelines : conseil sur l'adequation image / grille
+  const [orphanPct, setOrphanPct] = useState(null);
 
   // decoupe en plaques 16 x 16, derivee des dimensions
   const plateCols = Math.max(1, Math.round(W / PLATE));
@@ -725,6 +750,7 @@ export default function App() {
     setCounts(countsArray);
     setLastMs(Math.round(t1 - t0));
     setStockNote(result.stockNote || null);
+    setOrphanPct(typeof result.orphanPct === "number" ? result.orphanPct : null);
 
     return { indices: result.indices, counts: countsArray };
   }
@@ -944,6 +970,22 @@ export default function App() {
               <div className="text-xs opacity-70">
                 {plateCols*plateRows} plaques ({plateCols} x {plateRows}) - {(W*STUD_MM/10).toFixed(1)} x {(H*STUD_MM/10).toFixed(1)} cm - {W*H} tenons
               </div>
+              {orphanPct != null && (
+                <>
+                  <div className={`text-xs ${orphanPct > 3.0 ? "text-amber-700 font-medium" : orphanPct < 1.5 ? "text-green-700" : "text-neutral-600"}`}>
+                    {orphanPct > 3.0
+                      ? `Image trop detaillee pour cette grille (${orphanPct.toFixed(1)} % de pastilles isolees)`
+                      : orphanPct < 1.5
+                        ? `Image bien adaptee a cette grille (${orphanPct.toFixed(1)} % de pastilles isolees)`
+                        : `Image assez detaillee, rendu correct (${orphanPct.toFixed(1)} % de pastilles isolees)`}
+                  </div>
+                  {orphanPct > 3.0 && (
+                    <div className="text-xs opacity-60">
+                      Recadrer plus serre sur le sujet est plus efficace qu'agrandir la grille.
+                    </div>
+                  )}
+                </>
+              )}
               <label className="text-sm flex items-center gap-2">
                 <input type="checkbox" checked={showSectionGrid} onChange={(e)=>setShowSectionGrid(e.target.checked)} />
                 Afficher la separation des plaques
@@ -968,6 +1010,9 @@ export default function App() {
               <div className="ml-6 flex items-center gap-2">
                 <input id="trans" type="checkbox" checked={inclTrans} onChange={(e)=>setInclTrans(e.target.checked)} />
                 <label htmlFor="trans" className="text-sm">Inclure les transparentes</label>
+              </div>
+              <div className="ml-6 text-xs opacity-60">
+                Posees sur une plaque de fond, les briques transparentes laissent voir la plaque : leur rendu reel differe de la couleur affichee.
               </div>
             </div>
 

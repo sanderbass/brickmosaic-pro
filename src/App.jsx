@@ -31,6 +31,9 @@ const luminance = (r, g, b) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 // Poids d’une plate round 1x1
 const GRAM_PER_PART = 0.11;
 
+// taille d'une brique en pixels dans le PNG exporte (apercu client)
+const PNG_CELL = 24;
+
 /* petit hook de “debounce” pour l’aperçu */
 function useDebouncedEffect(fn, deps, delay = 250) {
   const t = useRef(null);
@@ -47,7 +50,7 @@ function useDebouncedEffect(fn, deps, delay = 250) {
 const BL = [
   ["White", "#F2F3F2", 1, false], ["Black", "#000000", 26, false],
   ["Very Light Gray", "#E6E6E6", 49, false], ["Light Gray", "#9BA19D", 9, false],
-  ["Light Bluish Gray", "#A3A24", 86, false], ["Dark Bluish Gray", "#6D6E5C", 85, false],
+  ["Light Bluish Gray", "#A3A2A4", 86, false], ["Dark Bluish Gray", "#6D6E5C", 85, false],
   ["Red", "#C91A09", 5, false], ["Dark Red", "#720E0F", 59, false],
   ["Orange", "#F08F1C", 4, false], ["Medium Orange", "#F19F4D", 31, false],
   ["Yellow", "#F2CD37", 3, false], ["Bright Light Yellow", "#FFF07A", 103, false],
@@ -202,10 +205,13 @@ function makeQuantWorker() {
     const palLen = palLAB.length;
 
     // pénalité pour couleurs très sombres (moins de "noir")
+    // facteur configurable via opts.darkPenalty (0..100), defaut 30
+    const darkPenaltyPct = (opts.darkPenalty === undefined || opts.darkPenalty === null) ? 30 : opts.darkPenalty;
+    const darkPenaltyF = clamp(darkPenaltyPct, 0, 100) / 100;
     const penalty = new Float32Array(palLen);
     for (let i=0;i<palLen;i++){
       const L = palLAB[i][0];
-      penalty[i] = (L < 0.35) ? (0.30 * (0.35 - L) / 0.35) : 0;
+      penalty[i] = (L < 0.35) ? (darkPenaltyF * (0.35 - L) / 0.35) : 0;
     }
 
     const R=new Float32Array(N), G=new Float32Array(N), B=new Float32Array(N);
@@ -273,11 +279,7 @@ function makeQuantWorker() {
 
     let AR=R, AG=G, AB=B;
 
-    const cache = new Int16Array(4096); cache.fill(-1);
     function nearestIndexRGB_w(r,g,b){
-      const key = ((r>>>4)<<8) | ((g>>>4)<<4) | (b>>>4);
-      const cached = cache[key];
-      if (cached>=0) return cached;
       const lab = rgb2lab(r,g,b);
       const wL = 1.15, wC = 0.95;
       let best=-1, bd=1e18;
@@ -287,7 +289,6 @@ function makeQuantWorker() {
         const adj = d * (1 + penalty[i]);
         if (adj<bd){bd=adj; best=i;}
       }
-      cache[key]=best;
       return best;
     }
 
@@ -325,30 +326,38 @@ function makeQuantWorker() {
       };
       if (dType==='fs'){
         for(let y=0;y<H;y++){
-          for(let x=0;x<W;x++){
+          // balayage serpentin : gauche->droite sur lignes paires, droite->gauche sur lignes impaires
+          const dir = (y%2===1) ? -1 : 1;
+          const xStart = (dir===1) ? 0 : W-1;
+          for(let n=0;n<W;n++){
+            const x = xStart + n*dir;
             const k=y*W+x;
             const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
             const j = nearestIndexRGB_w(rr,gg,bb);
             indices[k]=j; counts[j]++;
             const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
             const er=rr-pr, eg=gg-pg, eb=bb-pb;
-            push(x+1,y  , er,eg,eb, 7/16);
-            push(x-1,y+1, er,eg,eb, 3/16);
-            push(x  ,y+1, er,eg,eb, 5/16);
-            push(x+1,y+1, er,eg,eb, 1/16);
+            push(x+dir,y  , er,eg,eb, 7/16);
+            push(x-dir,y+1, er,eg,eb, 3/16);
+            push(x    ,y+1, er,eg,eb, 5/16);
+            push(x+dir,y+1, er,eg,eb, 1/16);
           }
         }
       } else {
         for(let y=0;y<H;y++){
-          for(let x=0;x<W;x++){
+          // balayage serpentin : gauche->droite sur lignes paires, droite->gauche sur lignes impaires
+          const dir = (y%2===1) ? -1 : 1;
+          const xStart = (dir===1) ? 0 : W-1;
+          for(let n=0;n<W;n++){
+            const x = xStart + n*dir;
             const k=y*W+x;
             const rr=clamp(Math.round(r[k]),0,255), gg=clamp(Math.round(g[k]),0,255), bb=clamp(Math.round(b[k]),0,255);
             const j = nearestIndexRGB_w(rr,gg,bb);
             indices[k]=j; counts[j]++;
             const pr=palRGB[j][0], pg=palRGB[j][1], pb=palRGB[j][2];
-            const er=(rr-pr)/8, eg=(gg-pg)/8, eb=(bb-pb)/8;
+            const er=(rr-pr)/8*dAmt, eg=(gg-pg)/8*dAmt, eb=(bb-pb)/8*dAmt;
             const push2=(xx,yy)=>{ if(xx>=0&&yy>=0&&xx<W&&yy<H){ const kk=yy*W+xx; r[kk]+=er; g[kk]+=eg; b[kk]+=eb; } };
-            push2(x+1,y); push2(x+2,y); push2(x-1,y+1); push2(x,y+1); push2(x+1,y+1); push2(x,y+2);
+            push2(x+dir,y); push2(x+2*dir,y); push2(x-dir,y+1); push2(x,y+1); push2(x+dir,y+1); push2(x,y+2);
           }
         }
       }
@@ -508,6 +517,8 @@ export default function App() {
   const [saturation, setSaturation] = useState(0);
   const [gamma, setGamma] = useState(1.0);
   const [sharpen, setSharpen] = useState(40);
+  // penalite appliquee aux couleurs sombres (0..100)
+  const [darkPenalty, setDarkPenalty] = useState(30);
 
   // Palette & numérotation
   const [useSupplier, setUseSupplier] = useState(true);
@@ -534,6 +545,8 @@ export default function App() {
   const tinyRef = useRef(null);
   const [counts, setCounts] = useState([]);
   const [indices, setIndices] = useState(null);
+  // dimensions de grille ayant reellement produit "indices"
+  const [gridDims, setGridDims] = useState(null);
   const [lastMs, setLastMs] = useState(null);
 
   const totalPieces = W * H;
@@ -581,17 +594,19 @@ export default function App() {
     return () => { workerRef.current && workerRef.current.terminate(); };
   }, []);
 
-  // Aperçu (sans numéros) + contours adaptatifs
-  function renderFromIndices() {
-    if (!indices) return;
-    const cell = 14;
-    const canvas = mosaicRef.current;
-    canvas.width = W * cell; canvas.height = H * cell;
+  // Dessine la mosaique sur un canvas quelconque.
+  // canvas   : element canvas cible (redimensionne par la fonction)
+  // idxArray : tableau d'indices de palette
+  // gw, gh   : dimensions de la grille
+  // cell     : taille d'une brique en pixels
+  // sections : booleen, tracer ou non les separations de sections
+  function drawMosaicTo(canvas, idxArray, gw, gh, cell, sections) {
+    canvas.width = gw * cell; canvas.height = gh * cell;
     const g = canvas.getContext("2d");
     g.clearRect(0, 0, canvas.width, canvas.height);
 
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const j = indices[y * W + x];
+    for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
+      const j = idxArray[y * gw + x];
       const [, rgb] = palette[j];
       const cx = x * cell, cy = y * cell;
       const pad = Math.max(1, Math.floor(cell * 0.12)), rad = (cell - pad * 2) / 2;
@@ -604,21 +619,29 @@ export default function App() {
 
     // grille
     g.strokeStyle = "rgba(0,0,0,0.18)"; g.lineWidth = 1;
-    for (let i = 0; i <= W; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, H * cell); g.stroke(); }
-    for (let j = 0; j <= H; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(W * cell, j * cell); g.stroke(); }
+    for (let i = 0; i <= gw; i++) { g.beginPath(); g.moveTo(i * cell, 0); g.lineTo(i * cell, gh * cell); g.stroke(); }
+    for (let j = 0; j <= gh; j++) { g.beginPath(); g.moveTo(0, j * cell); g.lineTo(gw * cell, j * cell); g.stroke(); }
 
     // sections
-    if (showSectionGrid && secCols > 0 && secRows > 0) {
-      const sW = Math.floor(W / secCols), sH = Math.floor(H / secRows);
+    if (sections && secCols > 0 && secRows > 0) {
+      const sW = Math.floor(gw / secCols), sH = Math.floor(gh / secRows);
       g.strokeStyle = "#ddd"; g.lineWidth = 4;
-      for (let c = 1; c < secCols; c++) { const x = c * sW * cell; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, H * cell); g.stroke(); }
-      for (let r = 1; r < secRows; r++) { const y = r * sH * cell; g.beginPath(); g.moveTo(0, y); g.lineTo(W * cell, y); g.stroke(); }
+      for (let c = 1; c < secCols; c++) { const x = c * sW * cell; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, gh * cell); g.stroke(); }
+      for (let r = 1; r < secRows; r++) { const y = r * sH * cell; g.beginPath(); g.moveTo(0, y); g.lineTo(gw * cell, y); g.stroke(); }
     }
+  }
+
+  // Aperçu (sans numéros) + contours adaptatifs
+  function renderFromIndices() {
+    if (!indices || !gridDims) return;
+    if (gridDims.w !== W || gridDims.h !== H) return;
+    if (indices.length !== W * H) return;
+    drawMosaicTo(mosaicRef.current, indices, W, H, 14, showSectionGrid);
   }
 
   // Traitement principal
   async function processImage() {
-    const img = images[idxImg]; if (!img) return;
+    const img = images[idxImg]; if (!img) return null;
     const tiny = tinyRef.current;
     drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
     const id = tiny.getContext("2d").getImageData(0, 0, W, H);
@@ -636,11 +659,11 @@ export default function App() {
       rgb: p[1], codeBL: p[2], supplierCode: p?.[4]?.supplierCode ?? null
     }));
     const worker = workerRef.current;
-    if (!worker) return;
+    if (!worker) return null;
 
     const opts = {
       brightness: bright, contrast, saturation, gamma, sharpen,
-      ditherType, ditherAmt, antiSingleton
+      ditherType, ditherAmt, antiSingleton, darkPenalty
     };
 
     const t0 = performance.now();
@@ -658,29 +681,48 @@ export default function App() {
     countsArray.sort((a, b) => b[1] - a[1]);
 
     setIndices(result.indices);
+    setGridDims({ w: W, h: H });
     setCounts(countsArray);
     setLastMs(Math.round(t1 - t0));
     setStockNote(result.stockNote || null);
-    renderFromIndices();
+
+    return { indices: result.indices, counts: countsArray };
   }
 
   useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, secCols, secRows, W, H]);
   useDebouncedEffect(() => { if (images[idxImg]) processImage(); },
-    [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
+    [images, idxImg, W, H, zoom, offX, offY, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, darkPenalty, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
 
   /* =================== Exports =================== */
+  // Renvoie des donnees garanties coherentes avec W/H courants,
+  // en relancant le calcul si l'etat est perime.
+  async function ensureGrid() {
+    const fresh = indices && gridDims
+      && gridDims.w === W && gridDims.h === H
+      && indices.length === W * H;
+    if (fresh) return { indices, counts };
+    return await processImage();
+  }
+
   async function exportPNG() {
-    if (!indices) await processImage();
-    const url = mosaicRef.current.toDataURL("image/png");
+    const grid = await ensureGrid();
+    if (!grid) return;
+    // canvas hors ecran : independant de l'etat du DOM et du cycle React
+    const off = document.createElement("canvas");
+    drawMosaicTo(off, grid.indices, W, H, PNG_CELL, showSectionGrid);
+    const url = off.toDataURL("image/png");
     await saveFile(url, `mosaic_${W}x${H}.png`);
   }
   async function exportCSV() {
-    if (!indices) await processImage();
+    const grid = await ensureGrid();
+    if (!grid) return;
+    const gridIdx = grid.indices;
+    const gridCounts = grid.counts;
     const rows = [];
     for (let y = 0; y < H; y++) {
       const cols = [];
       for (let x = 0; x < W; x++) {
-        const idx = indices[y * W + x];
+        const idx = gridIdx[y * W + x];
         const entry = palette[idx];
         const codeBL = entry[2];
         const codeSUP = entry?.[4]?.supplierCode ?? codeBL;
@@ -690,7 +732,7 @@ export default function App() {
     }
     await saveFile(new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" }), `matrix_${codeMode}_${W}x${H}.csv`);
 
-    const list = counts.map(([name, qty]) => {
+    const list = gridCounts.map(([name, qty]) => {
       const p = palette.find((q) => q[0] === name) || [];
       const codeBL = p[2] ?? "?"; const codeSUP = p?.[4]?.supplierCode ?? null;
       const grams = (qty * GRAM_PER_PART).toFixed(1);
@@ -700,7 +742,10 @@ export default function App() {
   }
 
   async function exportPDF_A3() {
-    if (!indices) await processImage();
+    const grid = await ensureGrid();
+    if (!grid) return;
+    const gridIdx = grid.indices;
+    const gridCounts = grid.counts;
     const JsPDF = await getJsPDF(); if (!JsPDF) { alert("jsPDF manquant"); return; }
     const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a3" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight(), m = 12;
@@ -718,7 +763,7 @@ export default function App() {
     doc.setFillColor(255, 255, 255); doc.rect(ox, oy, cell * W, cell * H, "F");
 
     for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const idx = indices[y * W + x];
+      const idx = gridIdx[y * W + x];
       const entry = palette[idx]; const [, rgb] = entry;
       const codeBL = entry[2]; const codeSUP = entry?.[4]?.supplierCode ?? codeBL;
       const code = codeMode === "SUP" ? codeSUP : codeBL;
@@ -740,7 +785,7 @@ export default function App() {
     // mini-légende
     let lx = ox + cell * W + 8, ly = 22; const box = 6;
     doc.setTextColor(0, 0, 0); doc.setFontSize(12); doc.text("Légende & quantités", lx, ly); ly += 6; doc.setFontSize(10);
-    const items = counts.map(([name, qty]) => {
+    const items = gridCounts.map(([name, qty]) => {
       const p = palette.find((q) => q[0] === name) || []; const rgb = p[1] || [200, 200, 200];
       const codeBL = p[2] ?? "?"; const codeSUP = p?.[4]?.supplierCode ?? null;
       const grams = qty * GRAM_PER_PART;
@@ -758,7 +803,10 @@ export default function App() {
   }
 
   async function exportPDF_Sections() {
-    if (!indices) await processImage();
+    const grid = await ensureGrid();
+    if (!grid) return;
+    const gridIdx = grid.indices;
+    const gridCounts = grid.counts;
     const JsPDF = await getJsPDF(); if (!JsPDF) { alert("jsPDF manquant"); return; }
     const doc = new JsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
     const Wp = doc.internal.pageSize.getWidth(), Hp = doc.internal.pageSize.getHeight();
@@ -776,7 +824,7 @@ export default function App() {
 
       for (let y = 0; y < sH; y++) for (let x = 0; x < sW; x++) {
         const gx = c * sW + x, gy = r * sH + y; if (gx >= W || gy >= H) continue;
-        const idp = indices[gy * W + gx];
+        const idp = gridIdx[gy * W + gx];
         const entry = palette[idp]; const [, rgb] = entry;
         const codeBL = entry[2]; const codeSUP = entry?.[4]?.supplierCode ?? codeBL;
         const code = codeMode === "SUP" ? codeSUP : codeBL;
@@ -790,14 +838,14 @@ export default function App() {
 
       doc.setDrawColor(180); doc.setLineWidth(0.1);
       for (let i = 0; i <= sW; i++) { const x = ox + i * cell; doc.line(x, oy, x, oy + cell * sH); }
-      for (let j = 0; j <= sH; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * sH, y); }
+      for (let j = 0; j <= sH; j++) { const y = oy + j * cell; doc.line(ox, y, ox + cell * sW, y); }
       doc.setDrawColor(0); doc.setLineWidth(0.2); doc.rect(ox, oy, cell * sW, cell * sH);
 
       n++;
     }
 
     // Légende pages finales (une couleur par ligne + poids)
-    addLegendPagesSortedBySupplier(doc, counts, palette);
+    addLegendPagesSortedBySupplier(doc, gridCounts, palette);
     doc.save(`sections_${secCols}x${secRows}_${codeMode}_${W}x${H}.pdf`);
   }
 
@@ -915,6 +963,9 @@ export default function App() {
               </div>
               <div><span className="text-xs">Netteté (unsharp) : {sharpen}%</span>
                 <input type="range" min={0} max={100} step={1} value={sharpen} onChange={(e)=>setSharpen(parseInt(e.target.value,10))} className="w-full" />
+              </div>
+              <div><span className="text-xs">Penalite noirs : {darkPenalty}</span>
+                <input type="range" min={0} max={100} step={1} value={darkPenalty} onChange={(e)=>setDarkPenalty(parseInt(e.target.value,10))} className="w-full" />
               </div>
               <div className="flex gap-2">
                 <button className="px-2 py-1 border rounded" onClick={()=>{

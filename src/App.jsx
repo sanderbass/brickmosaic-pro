@@ -126,19 +126,24 @@ function correlateSupplierToBL(listSupplier, listBL) {
 }
 
 /* =================== cadrage =================== */
-function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy) {
+function drawCroppedToRect(img, target, gridW, gridH, zoom, dx, dy, maxS) {
   const ctx = target.getContext("2d", { willReadFrequently: true });
-  target.width = gridW; target.height = gridH;
   const aspect = gridW / gridH, z = Math.max(1, zoom);
   let vw = img.width / z, vh = vw / aspect;
   if (vh > img.height / z) { vh = img.height / z; vw = vh * aspect; }
   const maxX = img.width - vw, maxY = img.height - vh;
   const sx = clamp(img.width / 2 - vw / 2 + dx * maxX, 0, maxX);
   const sy = clamp(img.height / 2 - vh / 2 + dy * maxY, 0, maxY);
+  // facteur de surechantillonnage, borne par la resolution reellement dispo
+  const cap = (maxS === undefined || maxS === null) ? 4 : maxS;
+  const S = Math.max(1, Math.min(cap,
+              Math.floor(Math.min(vw / gridW, vh / gridH))));
+  target.width = gridW * S; target.height = gridH * S;
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  ctx.clearRect(0, 0, gridW, gridH);
-  ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW, gridH);
+  ctx.clearRect(0, 0, gridW * S, gridH * S);
+  ctx.drawImage(img, sx, sy, vw, vh, 0, 0, gridW * S, gridH * S);
+  return S;
 }
 
 /* =================== Worker OKLab + dithering =================== */
@@ -197,8 +202,10 @@ function makeQuantWorker() {
   ].map(r=>r.map(v=>v/64-0.5));
 
   onmessage = (e)=>{
-    const { img, W, H, opts, pal, stocks } = e.data;
+    const { img, W, H, S, opts, pal, stocks } = e.data;
     const N=W*H;
+    const SS = (S && S >= 1) ? S : 1;
+    const sw = W * SS, sh = H * SS, SN = sw * sh;
 
     const palRGB = pal.map(p=>p.rgb);
     const palLAB = palRGB.map(([r,g,b])=>rgb2lab(r,g,b));
@@ -214,8 +221,39 @@ function makeQuantWorker() {
       penalty[i] = (L < 0.35) ? (darkPenaltyF * (0.35 - L) / 0.35) : 0;
     }
 
+    // Lecture a la resolution surechantillonnee (valeurs sRGB 0..255)
+    const SR=new Float32Array(SN), SG=new Float32Array(SN), SB=new Float32Array(SN);
+    for(let i=0,j=0;i<SN;i++,j+=4){ SR[i]=img[j]; SG[i]=img[j+1]; SB[i]=img[j+2]; }
+
+    // Accentuation AVANT reduction, a resolution surechantillonnee
+    if (opts.sharpen > 0){
+      const bR=new Float32Array(SR), bG=new Float32Array(SG), bB=new Float32Array(SB);
+      gaussBlurSep(sw, sh, bR, bG, bB);
+      const amt = opts.sharpen/100;
+      for(let i=0;i<SN;i++){
+        SR[i]=clamp(SR[i] + amt*(SR[i]-bR[i]), 0,255);
+        SG[i]=clamp(SG[i] + amt*(SG[i]-bG[i]), 0,255);
+        SB[i]=clamp(SB[i] + amt*(SB[i]-bB[i]), 0,255);
+      }
+    }
+
+    // Reduction par moyenne de blocs SS x SS, calculee en lumiere lineaire
     const R=new Float32Array(N), G=new Float32Array(N), B=new Float32Array(N);
-    for(let i=0,j=0;i<N;i++,j+=4){ R[i]=img[j]; G[i]=img[j+1]; B[i]=img[j+2]; }
+    const inv = 1/(SS*SS);
+    for(let y=0;y<H;y++){
+      for(let x=0;x<W;x++){
+        let ar=0, ag=0, ab=0;
+        for(let by=0;by<SS;by++){
+          const row=(y*SS+by)*sw + x*SS;
+          for(let bx=0;bx<SS;bx++){
+            const k=row+bx;
+            ar += srgb2lin(SR[k]); ag += srgb2lin(SG[k]); ab += srgb2lin(SB[k]);
+          }
+        }
+        const i=y*W+x;
+        R[i]=lin2srgb(ar*inv); G[i]=lin2srgb(ag*inv); B[i]=lin2srgb(ab*inv);
+      }
+    }
 
     const Badd = clamp(opts.brightness,-100,100)/100*255;
     const C = clamp(opts.contrast,-100,100);
@@ -259,22 +297,11 @@ function makeQuantWorker() {
       g = lin2srgb(Math.pow(srgb2lin(g), 1/gamma));
       b = lin2srgb(Math.pow(srgb2lin(b), 1/gamma));
       if (sat !== 0) {
-        let [h, S, L] = rgb2hsl(r,g,b);
-        S = clamp(S + sat*(sat>0 ? (1-S) : S), 0, 1);
-        const rr = hsl2rgb(h,S,L); r=rr[0]; g=rr[1]; b=rr[2];
+        let [h, Sat, L] = rgb2hsl(r,g,b);
+        Sat = clamp(Sat + sat*(sat>0 ? (1-Sat) : Sat), 0, 1);
+        const rr = hsl2rgb(h,Sat,L); r=rr[0]; g=rr[1]; b=rr[2];
       }
       R[i]=r; G[i]=g; B[i]=b;
-    }
-
-    if (opts.sharpen>0){
-      const rB=new Float32Array(R), gB=new Float32Array(G), bB=new Float32Array(B);
-      gaussBlurSep(W,H, rB,gB,bB);
-      const amt = opts.sharpen/100;
-      for(let i=0;i<N;i++){
-        R[i]=clamp(R[i] + amt*(R[i]-rB[i]), 0,255);
-        G[i]=clamp(G[i] + amt*(G[i]-gB[i]), 0,255);
-        B[i]=clamp(B[i] + amt*(B[i]-bB[i]), 0,255);
-      }
     }
 
     let AR=R, AG=G, AB=B;
@@ -643,8 +670,8 @@ export default function App() {
   async function processImage() {
     const img = images[idxImg]; if (!img) return null;
     const tiny = tinyRef.current;
-    drawCroppedToRect(img, tiny, W, H, zoom, offX, offY);
-    const id = tiny.getContext("2d").getImageData(0, 0, W, H);
+    const S = drawCroppedToRect(img, tiny, W, H, zoom, offX, offY, 4);
+    const id = tiny.getContext("2d").getImageData(0, 0, W * S, H * S);
 
     let stocksArr = null;
     if (stockEnabled) {
@@ -669,7 +696,7 @@ export default function App() {
     const t0 = performance.now();
     const result = await new Promise((resolve) => {
       worker.onmessage = (ev) => resolve(ev.data);
-      worker.postMessage({ img: id.data, W, H, opts, pal: palPack, stocks: stocksArr }, [id.data.buffer]);
+      worker.postMessage({ img: id.data, W, H, S, opts, pal: palPack, stocks: stocksArr }, [id.data.buffer]);
     });
     const t1 = performance.now();
 

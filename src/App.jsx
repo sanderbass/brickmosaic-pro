@@ -39,6 +39,18 @@ const PLATE = 16;          // tenons par cote de plaque
 const STUD_MM = 8;         // pas d'un tenon, en millimetres
 const PLATE_MM = PLATE * STUD_MM;  // 128 mm de cote
 
+// Duree en heures -> "6 h 24" (ou "34 min" sous une heure)
+// Seuils indicatifs de marge horaire, en EUR par heure travaillee :
+// au-dessus de 30 confortable, entre 15 et 30 acceptable, en dessous faible.
+const MARGE_H_BONNE = 30;
+const MARGE_H_FAIBLE = 15;
+
+const formatHeures = (h) => {
+  const total = Math.round(h * 60);
+  const hh = Math.floor(total / 60), mm = total % 60;
+  return hh > 0 ? `${hh} h ${String(mm).padStart(2, "0")}` : `${mm} min`;
+};
+
 /* petit hook de “debounce” pour l’aperçu */
 function useDebouncedEffect(fn, deps, delay = 250) {
   const t = useRef(null);
@@ -726,6 +738,22 @@ export default function App() {
   const [stockMap, setStockMap] = useState({});
   const [stockNote, setStockNote] = useState(null);
 
+  // Parametres economiques
+  const [piecesParSac, setPiecesParSac] = useState(1000);
+  const [sacPrix, setSacPrix]           = useState(1.95);  // EUR
+  const [plaquePrix, setPlaquePrix]     = useState(0.60);  // EUR
+  const [marge, setMarge]               = useState(3.0);   // coefficient
+
+  // Main d'oeuvre
+  const [modeProduit, setModeProduit] = useState("kit");  // "kit" | "montee"
+  const [cadence, setCadence]         = useState(6);      // pieces par minute
+  const [coutHoraire, setCoutHoraire] = useState(25);     // EUR/h reellement
+                                                          // depenses
+  const [tauxFacture, setTauxFacture] = useState(45);     // EUR/h factures
+  const [minParCouleur, setMinParCouleur] = useState(1);  // minutes de pesee
+                                                          // et d'ensachage
+                                                          // par couleur
+
   // Résultats
   const mosaicRef = useRef(null);
   const tinyRef = useRef(null);
@@ -809,6 +837,84 @@ export default function App() {
     });
     return copy;
   }, [palette]);
+
+  /* ============ devis : cout de revient et bon de commande ============ */
+  // Les sachets se comptent A PARTIR DES PIECES, jamais des grammes :
+  // GRAM_PER_PART majore volontairement la masse pour la pesee, repasser par
+  // les grammes appliquerait cette majoration une seconde fois.
+  // Partie main d'oeuvre et tarification, isolee pour etre calculable sur les
+  // deux modes sans dupliquer le devis. Deux taux distincts : le cout horaire
+  // est une charge, le taux facture est un produit. Le coefficient de marge ne
+  // s'applique qu'a la matiere, le benefice sur le temps venant de l'ecart
+  // entre les deux taux.
+  function calcMainOeuvre(mode, couleursTotal, piecesTotal, coutMatiere, coutPlaques) {
+    const heuresPreparation = (couleursTotal * minParCouleur) / 60;
+    const heuresMontage = mode === "montee" ? piecesTotal / cadence / 60 : 0;
+    const heuresTotal = heuresPreparation + heuresMontage;
+    const coutMainOeuvre = heuresTotal * coutHoraire;        // ce que ca coute
+    const produitMainOeuvre = heuresTotal * tauxFacture;     // ce que ca rapporte
+    const coutRevient = coutMatiere + coutPlaques + coutMainOeuvre;
+    const prixVente = (coutMatiere + coutPlaques) * marge + produitMainOeuvre;
+    const marge_euros = prixVente - coutRevient;
+    return {
+      heuresPreparation, heuresMontage, heuresTotal, coutMainOeuvre, produitMainOeuvre,
+      coutRevient, prixVente, marge_euros,
+      marge_horaire: heuresTotal > 0 ? marge_euros / heuresTotal : null,
+    };
+  }
+
+  function calcDevis(list) {
+    const lignes = list.map(([nom, qte]) => {
+      const p = palette.find((q) => q[0] === nom) || [];
+      const brut = stockEnabled ? stockMap[nom] : null;
+      const n = parseInt(brut, 10);
+      const dejaEnStock = (brut == null || brut === "" || isNaN(n) || n < 0) ? 0 : n;
+      const manquant = Math.max(0, qte - dejaEnStock);
+      const sachets = Math.ceil(manquant / piecesParSac);
+      return {
+        nom, qte, dejaEnStock, manquant, sachets,
+        grammes: qte * GRAM_PER_PART,
+        cout: sachets * sacPrix,
+        codeBL: p[2] ?? "?",
+        codeSUP: p?.[4]?.supplierCode ?? null,
+      };
+    }).sort((a, b) => ((a.codeSUP ?? 9999) - (b.codeSUP ?? 9999)) || a.nom.localeCompare(b.nom));
+
+    const piecesTotal = lignes.reduce((s, l) => s + l.qte, 0);
+    const sachetsTotal = lignes.reduce((s, l) => s + l.sachets, 0);
+    const rares = lignes.filter((l) => l.qte < 10);
+
+    const coutCommande = sachetsTotal * sacPrix;
+    const coutMatiere = piecesTotal / piecesParSac * sacPrix;
+    const coutPlaques = plateCols * plateRows * plaquePrix;
+
+    const mo = calcMainOeuvre(modeProduit, lignes.length, piecesTotal, coutMatiere, coutPlaques);
+    // meme calcul pour l'autre mode, afin de pouvoir comparer sans basculer
+    const autre = calcMainOeuvre(modeProduit === "montee" ? "kit" : "montee",
+      lignes.length, piecesTotal, coutMatiere, coutPlaques);
+
+    return {
+      ...mo,
+      autre,
+      autreMode: modeProduit === "montee" ? "kit" : "montee",
+      lignes,
+      piecesTotal,
+      grammesTotal: piecesTotal * GRAM_PER_PART,   // affichage seulement
+      sachetsTotal,
+      couleursTotal: lignes.length,
+      coutCommande,
+      coutMatiere,
+      coutPlaques,
+      tauxUtilisation: sachetsTotal > 0 ? piecesTotal / (sachetsTotal * piecesParSac) : 0,
+      couleursRares: rares.length,
+      sachetsRares: rares.reduce((s, l) => s + l.sachets, 0),
+      economieRares: rares.reduce((s, l) => s + l.sachets, 0) * sacPrix,
+    };
+  }
+  const devis = useMemo(() => calcDevis(counts),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [counts, stockMap, stockEnabled, plateCols, plateRows, piecesParSac, sacPrix, plaquePrix, marge,
+     modeProduit, cadence, coutHoraire, tauxFacture, minParCouleur]);
 
   // Worker
   const workerRef = useRef(null);
@@ -1005,6 +1111,40 @@ export default function App() {
       return `[${codeBL}] ${name}${codeSUP != null ? ` (#${String(codeSUP).padStart(2,"0")})` : ""};${qty};${grams} g`;
     });
     await saveFile(new Blob([`Code-Name;Qty;Weight(g)\n` + list.join("\n")], { type: "text/csv;charset=utf-8" }), `parts_${codeMode}_${W}x${H}.csv`);
+  }
+
+  async function exportCommandeCSV() {
+    const grid = await ensureGrid();
+    if (!grid) return;
+    const d = calcDevis(grid.counts);
+    // decimales a la virgule, separateur point-virgule : Excel francais
+    const num = (v, dec) => v.toFixed(dec).replace(".", ",");
+    const pad2 = (n) => String(n).padStart(2, "0");
+
+    const rows = ["Code;Nom;Pieces;Grammes a peser;Deja en stock;A commander;Sachets;Cout EUR"];
+    for (const l of d.lignes) {
+      const code = l.codeSUP != null ? `#${pad2(l.codeSUP)}` : `[${l.codeBL}]`;
+      rows.push([code, l.nom, l.qte, num(l.grammes, 1), l.dejaEnStock, l.manquant, l.sachets, num(l.cout, 2)].join(";"));
+    }
+    rows.push("");
+    rows.push(`Pieces posees;${d.piecesTotal}`);
+    rows.push(`Grammes a peser;${num(d.grammesTotal, 1)}`);
+    rows.push(`Sachets a commander;${d.sachetsTotal}`);
+    rows.push(`Cout de la commande EUR;${num(d.coutCommande, 2)}`);
+    rows.push(`Cout de revient EUR;${num(d.coutRevient, 2)}`);
+    rows.push(`Prix de vente suggere EUR;${num(d.prixVente, 2)}`);
+    rows.push(`Mode produit;${modeProduit === "montee" ? "Mosaique montee" : "Kit a monter"}`);
+    rows.push(`Heures de preparation;${num(d.heuresPreparation, 2)}`);
+    rows.push(`Heures de montage;${num(d.heuresMontage, 2)}`);
+    rows.push(`Total heures;${num(d.heuresTotal, 2)}`);
+    rows.push(`Cout horaire EUR/h;${num(coutHoraire, 2)}`);
+    rows.push(`Taux facture EUR/h;${num(tauxFacture, 2)}`);
+    rows.push(`Cout main d oeuvre EUR;${num(d.coutMainOeuvre, 2)}`);
+    rows.push(`Main d oeuvre facturee EUR;${num(d.produitMainOeuvre, 2)}`);
+    rows.push(`Marge EUR;${num(d.marge_euros, 2)}`);
+    rows.push(`Marge par heure EUR/h;${d.marge_horaire != null ? num(d.marge_horaire, 2) : ""}`);
+
+    await saveFile(new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8" }), `commande_${W}x${H}.csv`);
   }
 
   async function exportPDF_A3() {
@@ -1385,12 +1525,134 @@ export default function App() {
               {stockNote && <div className={`text-xs mt-1 ${/satisfaites/.test(stockNote)?"text-green-700":"text-amber-700"}`}>{stockNote}</div>}
             </div>
 
+            {/* 8) Devis & commande */}
+            {counts.length > 0 && (
+              <div className="space-y-2 pt-2 border-t">
+                <label className="text-sm font-medium">8) Devis &amp; commande</label>
+
+                <div className="space-y-1">
+                  <label className="text-sm flex items-center gap-2">
+                    <input type="radio" name="produit" checked={modeProduit==="kit"} onChange={()=>setModeProduit("kit")} />
+                    Kit a monter (pieces + notice)
+                  </label>
+                  <label className="text-sm flex items-center gap-2">
+                    <input type="radio" name="produit" checked={modeProduit==="montee"} onChange={()=>setModeProduit("montee")} />
+                    Mosaique montee
+                  </label>
+                  <div className="text-xs opacity-60">
+                    Le kit ne facture que la preparation. La mosaique montee inclut le temps de pose de chaque piece.
+                  </div>
+                  <div className="text-xs opacity-70">
+                    En mode {devis.autreMode === "kit" ? "kit" : "monte"} : vente {devis.autre.prixVente.toFixed(2)} EUR, marge {devis.autre.marge_euros.toFixed(2)} EUR
+                    {devis.autre.marge_horaire != null && <>, {devis.autre.marge_horaire.toFixed(2)} EUR/h</>}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div><span className="text-xs">Pieces par sachet</span>
+                    <input type="number" min={1} step={50} value={piecesParSac} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setPiecesParSac(Math.max(1, parseInt(e.target.value,10) || 1))} />
+                  </div>
+                  <div><span className="text-xs">Prix du sachet (EUR)</span>
+                    <input type="number" min={0} step={0.05} value={sacPrix} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setSacPrix(Math.max(0, parseFloat(e.target.value) || 0))} />
+                  </div>
+                  <div><span className="text-xs">Prix d'une plaque 16x16 (EUR)</span>
+                    <input type="number" min={0} step={0.05} value={plaquePrix} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setPlaquePrix(Math.max(0, parseFloat(e.target.value) || 0))} />
+                  </div>
+                  <div><span className="text-xs">Coefficient de marge</span>
+                    <input type="number" min={1} step={0.1} value={marge} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setMarge(Math.max(0, parseFloat(e.target.value) || 0))} />
+                  </div>
+                </div>
+
+                <div className="text-xs font-medium pt-1">Main d'oeuvre</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div><span className={`text-xs ${modeProduit==="kit" ? "opacity-40" : ""}`}>Cadence de pose (pieces/min)</span>
+                    <input type="number" min={0.1} step={0.5} value={cadence} disabled={modeProduit==="kit"}
+                      className="w-full border rounded px-1 py-0.5 disabled:opacity-40"
+                      onChange={(e)=>setCadence(Math.max(0.1, parseFloat(e.target.value) || 0.1))} />
+                  </div>
+                  <div><span className="text-xs">Cout horaire reel (EUR/h)</span>
+                    <input type="number" min={0} step={1} value={coutHoraire} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setCoutHoraire(Math.max(0, parseFloat(e.target.value) || 0))} />
+                    <div className="text-xs opacity-60">Salaire et charges. Ce que l'heure vous coute.</div>
+                  </div>
+                  <div><span className="text-xs">Taux facture (EUR/h)</span>
+                    <input type="number" min={0} step={1} value={tauxFacture} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setTauxFacture(Math.max(0, parseFloat(e.target.value) || 0))} />
+                    <div className="text-xs opacity-60">Ce que vous facturez au client, frais generaux et benefice compris.</div>
+                  </div>
+                  <div><span className="text-xs">Preparation par couleur (min)</span>
+                    <input type="number" min={0} step={0.5} value={minParCouleur} className="w-full border rounded px-1 py-0.5"
+                      onChange={(e)=>setMinParCouleur(Math.max(0, parseFloat(e.target.value) || 0))} />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border p-2 space-y-0.5">
+                  <div className="text-sm font-medium">Cout de revient</div>
+                  <div className="text-xs">Matiere posee : {devis.piecesTotal} pieces ({devis.grammesTotal.toFixed(1)} g) &rarr; {devis.coutMatiere.toFixed(2)} EUR</div>
+                  <div className="text-xs">Plaques de fond : {plateCols*plateRows} x {plaquePrix.toFixed(2)} EUR = {devis.coutPlaques.toFixed(2)} EUR</div>
+                  <div className="text-xs">Preparation : {formatHeures(devis.heuresPreparation)}</div>
+                  {modeProduit === "montee" && (
+                    <div className="text-xs">Montage : {formatHeures(devis.heuresMontage)}</div>
+                  )}
+                  <div className="text-xs">Main d'oeuvre (cout) : {formatHeures(devis.heuresTotal)} &rarr; {devis.coutMainOeuvre.toFixed(2)} EUR</div>
+                  <div className="text-xs">Main d'oeuvre (facturee) : {formatHeures(devis.heuresTotal)} &rarr; {devis.produitMainOeuvre.toFixed(2)} EUR</div>
+                  <div className="text-xs">Cout de revient : {devis.coutRevient.toFixed(2)} EUR</div>
+                  <div className="text-lg font-bold">Prix de vente suggere : {devis.prixVente.toFixed(2)} EUR</div>
+                  <div className="text-xs">Marge : {devis.marge_euros.toFixed(2)} EUR</div>
+                  {devis.marge_horaire != null && (
+                    <div className={`text-xs ${devis.marge_horaire > MARGE_H_BONNE ? "text-green-700 font-medium" : devis.marge_horaire < MARGE_H_FAIBLE ? "text-amber-700 font-medium" : "text-neutral-600"}`}>
+                      Marge par heure travaillee : {devis.marge_horaire.toFixed(2)} EUR/h
+                    </div>
+                  )}
+                </div>
+
+                {tauxFacture < coutHoraire && (
+                  <div className="text-xs text-amber-700 font-medium border border-amber-700 rounded-xl p-2">
+                    Le taux facture est inferieur au cout horaire : chaque heure travaillee vous fait perdre de l'argent.
+                  </div>
+                )}
+
+                {devis.marge_horaire != null && devis.marge_horaire < MARGE_H_FAIBLE && devis.heuresTotal > 2 && (
+                  <div className="text-xs text-amber-700 font-medium border border-amber-700 rounded-xl p-2">
+                    A ce tarif, les {formatHeures(devis.heuresTotal)} de travail ne degagent que {devis.marge_horaire.toFixed(2)} EUR de marge par heure. Augmentez le taux horaire facture ou vendez le kit plutot que la mosaique montee.
+                  </div>
+                )}
+
+                {modeProduit === "montee" && devis.heuresMontage > 8 && (
+                  <div className="text-xs text-amber-700 font-medium border border-amber-700 rounded-xl p-2">
+                    Ce montage represente plus d'une journee de travail. Verifiez que le prix suggere couvre reellement ce temps.
+                  </div>
+                )}
+
+                <div className="rounded-xl border-2 border-neutral-800 bg-neutral-50 p-2 space-y-0.5">
+                  <div className="text-sm font-medium">A commander</div>
+                  <div className="text-xs">Sachets a commander : {devis.sachetsTotal} ({devis.couleursTotal} couleurs)</div>
+                  <div className="text-xs">Cout de la commande : {devis.coutCommande.toFixed(2)} EUR</div>
+                  <div className="text-xs">Taux d'utilisation : {(devis.tauxUtilisation*100).toFixed(1)} %</div>
+                  <div className="text-xs opacity-60">
+                    Les pieces non consommees restent en stock pour les mosaiques suivantes. Declarez votre stock dans la section precedente pour ne commander que le manquant.
+                  </div>
+                </div>
+
+                {devis.couleursRares >= 3 && (
+                  <div className="text-xs text-amber-700 font-medium border border-amber-700 rounded-xl p-2">
+                    {devis.couleursRares} couleurs comptent moins de 10 pieces et coutent pourtant {devis.sachetsRares} sachets, soit {devis.economieRares.toFixed(2)} EUR. Le curseur Quantite minimale les reaffecte aux teintes voisines.
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Actions */}
             <div className="pt-2 border-t space-y-2">
               <button className="w-full bg-black text-white rounded-xl py-2" onClick={processImage} disabled={!images.length}>Générer l’aperçu (worker)</button>
               <div className="grid grid-cols-2 gap-2">
                 <button onClick={exportPNG} className="px-3 py-2 rounded-xl border" disabled={!images.length}>PNG</button>
                 <button onClick={exportCSV} className="px-3 py-2 rounded-xl border" disabled={!images.length}>CSV</button>
+                <button onClick={exportCommandeCSV} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>Export commande (CSV)</button>
                 <button onClick={exportPDF_A3} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF A3 (numéros + mini-légende)</button>
                 <button onClick={exportPDF_Sections} className="px-3 py-2 rounded-xl border col-span-2" disabled={!images.length}>PDF Sections (légende finale)</button>
               </div>

@@ -89,9 +89,9 @@ const BL = [
 // Palette fournisseur (codes #01→#99)
 const SUPPLIER = [
   [1,"White","#F2F3F2",false],[2,"Very Light Gray","#E6E6E6",false],[3,"Light Gray","#9BA19D",false],[4,"Medium Gray","#B7B7B7",false],
-  [5,"Dark Gray","#6D6E5C",false],[6,"Black","#000000",false],[7,"Light Bluish Gray","#A3A2A4",false],[8,"Dark Bluish Gray","#6D6E5C",false],
-  [9,"Eggshell","#F2E6D6",false],[10,"Eggshell Pink","#F7E1E8",false],[11,"Light Nougat","#F6D7B3",false],[12,"Medium Tan","#CBAE86",false],
-  [13,"Nougat","#CC8E69",false],[14,"Medium Nougat","#AE7A59",false],[15,"Flesh","#D78E76",false],[16,"Fabuland Brown","#C56E2D",false],
+  [5,"Dark Gray","#6D6E5C",false],[6,"Black","#000000",false],[7,"Light Bluish Gray","#AFB5C7",false],[8,"Dark Bluish Gray","#595D60",false],
+  [9,"Eggshell","#F5E6C8",false],[10,"Eggshell Pink","#F5DCD6",false],[11,"Light Nougat","#F6D7B3",false],[12,"Medium Tan","#CBAE86",false],
+  [13,"Nougat","#CC8E69",false],[14,"Medium Nougat","#AE7A59",false],[15,"Flesh","#E8A090",false],[16,"Fabuland Brown","#C56E2D",false],
   [17,"Brown","#6B3F20",false],[18,"Dark Brown","#4C2F27",false],[19,"Tan","#E4CD9E",false],[20,"Dark Tan","#958A73",false],
   [21,"Light Yellow","#FFF07A",false],[22,"Yellow","#F2CD37",false],[23,"Dark Yellow","#D5A021",false],[24,"Medium Orange","#F19F4D",false],
   [25,"Orange","#F08F1C",false],[26,"Light Salmon","#F6D5C9",false],[27,"Pink","#FFB5D1",false],[28,"Dark Pink","#DA70D6",false],
@@ -104,10 +104,71 @@ const SUPPLIER = [
   [53,"Light Aqua","#A7DCD6",false],[54,"Coral","#FF6F61",false],
   // Trans
   [85,"Trans-Black","#635F52",true],[86,"Trans-Brown","#6F4E37",true],[87,"Trans-Purple","#5F2683",true],[88,"Trans-Dark Pink","#C94A83",true],
-  [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F08F1C",true],[92,"Trans-Neon Green","#C0FF00",true],
+  [89,"Trans-Pink","#DF6695",true],[90,"Trans-Neon Orange","#FF800D",true],[91,"Trans-Orange","#F5A03C",true],[92,"Trans-Neon Green","#C0FF00",true],
   [93,"Trans-Green","#5AC35E",true],[94,"Trans-Blue","#0094FF",true],[95,"Trans-Light Blue","#A3D2F2",true],[96,"Trans-Red","#DE0000",true],
   [97,"Trans-Yellow","#F5CD2A",true],[98,"Trans-Clear","#E6F2F2",true],[99,"Trans-Medium Blue","#6EC1E4",true],
 ];
+
+/* ============ audit de contraste de la palette fournisseur ============ */
+// Copie locale de la conversion OKLab du worker : celle-ci vit dans un
+// template string et n'est pas accessible depuis le module.
+function srgb2linLocal(c){ c/=255; return c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055,2.4); }
+function rgb2oklab(r,g,b){
+  const rl=srgb2linLocal(r), gl=srgb2linLocal(g), bl=srgb2linLocal(b);
+  const l = 0.4122214708*rl + 0.5363325363*gl + 0.0514459929*bl;
+  const m = 0.2119034982*rl + 0.6806995451*gl + 0.1073969566*bl;
+  const s = 0.0883024619*rl + 0.2817188376*gl + 0.6299787005*bl;
+  const l_ = Math.cbrt(l), m_ = Math.cbrt(m), s_ = Math.cbrt(s);
+  return [
+    0.2104542553*l_ + 0.7936177850*m_ - 0.0040720468*s_,
+    1.9779984951*l_ - 2.4285922050*m_ + 0.4505937099*s_,
+    0.0259040371*l_ + 0.7827717662*m_ - 0.8086757660*s_
+  ];
+}
+// Audit d'atteignabilite. Une couleur n'est perdue que si aucune teinte
+// source ne la choisit jamais : la petitesse d'un domaine n'est pas un
+// defaut, le noir et le blanc en ont de tres petits.
+// On echantillonne le cube RVB tous les 8 niveaux (32768 points) et on
+// compte, pour chaque couleur, les points dont elle est la plus proche.
+function auditSupplierPalette(list) {
+  const echantillons = [];
+  for (let r = 0; r < 256; r += 8)
+    for (let g = 0; g < 256; g += 8)
+      for (let b = 0; b < 256; b += 8) echantillons.push(rgb2oklab(r, g, b));
+
+  // opaques et transparentes traitees separement : une couleur ne concurrence
+  // que celles de sa propre famille
+  const perdues = [];
+  for (const groupe of [list.filter((e) => !e[3]), list.filter((e) => e[3])]) {
+    if (groupe.length < 2) continue;
+    const labs = groupe.map((e) => rgb2oklab(...hexToRgb(e[2])));
+    const gagnes = new Int32Array(groupe.length);
+    for (let s = 0; s < echantillons.length; s++) {
+      const L = echantillons[s];
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < labs.length; i++) {
+        // meme ponderation que le quantificateur, sans la penalite sur les sombres
+        const dL = L[0] - labs[i][0], dA = L[1] - labs[i][1], dB = L[2] - labs[i][2];
+        const d = 1.15 * dL * dL + 0.95 * (dA * dA + dB * dB);
+        if (d < bd) { bd = d; best = i; }
+      }
+      gagnes[best]++;
+    }
+    for (let i = 0; i < groupe.length; i++) if (gagnes[i] === 0) perdues.push(groupe[i]);
+  }
+
+  if (perdues.length) {
+    const pad2 = (n) => String(n).padStart(2, "0");
+    console.warn("Palette : couleur inatteignable, elle ne sera jamais choisie\n" +
+      perdues.map((e) => `#${pad2(e[0])} ${e[1]}`).join("\n"));
+  }
+}
+// Une seule execution au chargement du module. Le garde sur import.meta.hot
+// evite de relancer le calcul a chaque rechargement a chaud de Vite.
+if (!import.meta.hot || !import.meta.hot.data.paletteAuditee) {
+  auditSupplierPalette(SUPPLIER);
+  if (import.meta.hot) import.meta.hot.data.paletteAuditee = true;
+}
 
 // corrélation fournisseur → BL
 function correlateSupplierToBL(listSupplier, listBL) {
@@ -466,6 +527,44 @@ function makeQuantWorker() {
       indices.set(out);
     }
 
+    // Filtre de quantite minimale : les references anecdotiques sont
+    // reaffectees a la couleur conservee la plus proche en OKLab.
+    // Place APRES l'anti-singleton (qui pourrait recreer des isolats) et
+    // AVANT les contraintes de stock (qui statuent sur le resultat final).
+    let fusions = null;
+    const qtyMin = (opts.qtyMin|0);
+    if (qtyMin > 1){
+      const cnt = new Int32Array(palLen);
+      for(let i=0;i<N;i++){ cnt[indices[i]]++; }
+      const keep = [];
+      for(let i=0;i<palLen;i++){ if (cnt[i] >= qtyMin) keep.push(i); }
+      if (keep.length > 0){
+        const wL = 1.15, wC = 0.95;
+        const remap = new Int32Array(palLen);
+        for(let i=0;i<palLen;i++) remap[i] = i;
+        let removed = 0, moved = 0;
+        for(let i=0;i<palLen;i++){
+          if (cnt[i] === 0 || cnt[i] >= qtyMin) continue;
+          let best = keep[0], bd = 1e18;
+          for(let q=0;q<keep.length;q++){
+            const j = keep[q];
+            const dL = palLAB[i][0]-palLAB[j][0];
+            const dA = palLAB[i][1]-palLAB[j][1];
+            const dB = palLAB[i][2]-palLAB[j][2];
+            const d = wL*dL*dL + wC*(dA*dA + dB*dB);
+            if (d < bd){ bd = d; best = j; }
+          }
+          remap[i] = best;
+          removed++; moved += cnt[i];
+        }
+        if (removed > 0){
+          for(let i=0;i<N;i++){ indices[i] = remap[indices[i]]; }
+          counts.fill(0); for(let i=0;i<N;i++){ counts[indices[i]]++; }
+        }
+        fusions = { removed, moved };
+      }
+    }
+
     // Contraintes stock (identique à avant)
     let stockNote=null;
     if (Array.isArray(stocks)){
@@ -520,7 +619,7 @@ function makeQuantWorker() {
     const finalCounts = new Int32Array(palLen);
     for(let i=0;i<N;i++){ finalCounts[indices[i]]++; }
 
-    postMessage({ indices, counts: finalCounts, stockNote, orphanPct });
+    postMessage({ indices, counts: finalCounts, stockNote, orphanPct, fusions });
   };`;
   const blob = new Blob([code], { type: "application/javascript" });
   return new Worker(URL.createObjectURL(blob));
@@ -613,6 +712,11 @@ export default function App() {
   const [ditherType, setDitherType] = useState("bayer"); // 'none' | 'fs' | 'atk' | 'bayer'
   const [ditherAmt, setDitherAmt] = useState(40);        // %
   const [antiSingleton, setAntiSingleton] = useState(true);
+  // quantite minimale par couleur : 0 desactive le filtre
+  const [qtyMin, setQtyMin] = useState(0);
+  const [fusions, setFusions] = useState(null);
+  // "plat" (lecture des couleurs) ou "realiste" (rendu monte)
+  const [rendu, setRendu] = useState("plat");
 
   // Sections
   const [showSectionGrid, setShowSectionGrid] = useState(true);
@@ -719,21 +823,57 @@ export default function App() {
   // gw, gh   : dimensions de la grille
   // cell     : taille d'une brique en pixels
   // sections : booleen, tracer ou non les separations de sections
-  function drawMosaicTo(canvas, idxArray, gw, gh, cell, sections) {
+  // realiste : rendu monte (tenon, ombre, plaque de fond visible)
+  function drawMosaicTo(canvas, idxArray, gw, gh, cell, sections, realiste) {
     canvas.width = gw * cell; canvas.height = gh * cell;
     const g = canvas.getContext("2d");
     g.clearRect(0, 0, canvas.width, canvas.height);
+
+    // mise a l'echelle d'un canal, bornee a 0..255
+    const shade = (rgb, f) => [
+      Math.max(0, Math.min(255, Math.round(rgb[0] * f))),
+      Math.max(0, Math.min(255, Math.round(rgb[1] * f))),
+      Math.max(0, Math.min(255, Math.round(rgb[2] * f))),
+    ];
+    const css = (c) => `rgb(${c[0]},${c[1]},${c[2]})`;
+
+    if (realiste) {
+      // plaque de fond visible entre les pieces
+      g.fillStyle = "#3A3A3A";
+      g.fillRect(0, 0, canvas.width, canvas.height);
+    }
 
     for (let y = 0; y < gh; y++) for (let x = 0; x < gw; x++) {
       const j = idxArray[y * gw + x];
       const [, rgb] = palette[j];
       const cx = x * cell, cy = y * cell;
       const pad = Math.max(1, Math.floor(cell * 0.12)), rad = (cell - pad * 2) / 2;
-      g.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+      const mx = cx + cell / 2, my = cy + cell / 2;
+
+      if (realiste) {
+        // plaque ronde
+        g.fillStyle = css(rgb);
+        g.beginPath(); g.arc(mx, my, rad, 0, Math.PI * 2); g.fill();
+        // lisere de la plaque
+        g.strokeStyle = css(shade(rgb, 0.75));
+        g.lineWidth = 1;
+        g.beginPath(); g.arc(mx, my, rad, 0, Math.PI * 2); g.stroke();
+        // ombre portee du tenon, en bas a droite
+        const rt = rad * 0.62;
+        g.strokeStyle = css(shade(rgb, 0.82));
+        g.lineWidth = Math.max(1, cell * 0.08);
+        g.beginPath(); g.arc(mx, my, rt, -Math.PI / 4, Math.PI * 3 / 4); g.stroke();
+        // relief du tenon
+        g.fillStyle = css(shade(rgb, 1.12));
+        g.beginPath(); g.arc(mx, my, rt, 0, Math.PI * 2); g.fill();
+        continue;
+      }
+
+      g.fillStyle = css(rgb);
       const lum = (0.2126*rgb[0] + 0.7152*rgb[1] + 0.0722*rgb[2]) / 255;
       g.strokeStyle = lum < 0.45 ? "rgba(255,255,255,0.28)" : "rgba(0,0,0,0.28)";
       g.lineWidth = Math.max(1, Math.floor(cell * 0.05));
-      g.beginPath(); g.arc(cx + cell / 2, cy + cell / 2, rad, 0, Math.PI * 2); g.fill(); g.stroke();
+      g.beginPath(); g.arc(mx, my, rad, 0, Math.PI * 2); g.fill(); g.stroke();
     }
 
     // grille
@@ -759,7 +899,7 @@ export default function App() {
     if (gridDims.w !== W || gridDims.h !== H) return;
     if (indices.length !== W * H) return;
     if (gridDims.pal !== palette) return;
-    drawMosaicTo(mosaicRef.current, indices, W, H, 14, showSectionGrid);
+    drawMosaicTo(mosaicRef.current, indices, W, H, 14, showSectionGrid, rendu === "realiste");
   }
 
   // Traitement principal
@@ -786,7 +926,7 @@ export default function App() {
 
     const opts = {
       brightness: bright, contrast, saturation, gamma, sharpen,
-      ditherType, ditherAmt, antiSingleton, darkPenalty
+      ditherType, ditherAmt, antiSingleton, darkPenalty, qtyMin
     };
 
     const t0 = performance.now();
@@ -809,13 +949,14 @@ export default function App() {
     setLastMs(Math.round(t1 - t0));
     setStockNote(result.stockNote || null);
     setOrphanPct(typeof result.orphanPct === "number" ? result.orphanPct : null);
+    setFusions(result.fusions && result.fusions.removed > 0 ? result.fusions : null);
 
     return { indices: result.indices, counts: countsArray };
   }
 
-  useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, W, H]);
+  useEffect(() => { renderFromIndices(); /* eslint-disable-next-line */ }, [indices, palette, showSectionGrid, rendu, W, H]);
   useDebouncedEffect(() => { if (images[idxImg]) processImage(); },
-    [images, idxImg, W, H, zoom, offX, offY, bgColor, cadrage, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, darkPenalty, ditherType, ditherAmt, antiSingleton, stockEnabled, stockMap], 250);
+    [images, idxImg, W, H, zoom, offX, offY, bgColor, cadrage, useSupplier, inclTrans, bright, contrast, saturation, gamma, sharpen, darkPenalty, ditherType, ditherAmt, antiSingleton, qtyMin, stockEnabled, stockMap], 250);
 
   /* =================== Exports =================== */
   // Renvoie des donnees garanties coherentes avec W/H courants,
@@ -834,7 +975,7 @@ export default function App() {
     if (!grid) return;
     // canvas hors ecran : independant de l'etat du DOM et du cycle React
     const off = document.createElement("canvas");
-    drawMosaicTo(off, grid.indices, W, H, PNG_CELL, showSectionGrid);
+    drawMosaicTo(off, grid.indices, W, H, PNG_CELL, showSectionGrid, rendu === "realiste");
     const url = off.toDataURL("image/png");
     await saveFile(url, `mosaic_${W}x${H}.png`);
   }
@@ -1094,7 +1235,7 @@ export default function App() {
               <label className="text-sm font-medium">3) Palette & transparents</label>
               <label className="text-sm flex items-center gap-2">
                 <input type="radio" name="src" checked={useSupplier} onChange={()=>setUseSupplier(true)} />
-                Palette fournisseur (99 couleurs)
+                Palette fournisseur (69 couleurs)
               </label>
               <label className="text-sm flex items-center gap-2">
                 <input type="radio" name="src" checked={!useSupplier} onChange={()=>setUseSupplier(false)} />
@@ -1142,6 +1283,17 @@ export default function App() {
                 <input type="checkbox" checked={antiSingleton} onChange={(e)=>setAntiSingleton(e.target.checked)} />
                 Anti-singleton (corrige les pixels isolés)
               </label>
+              <div><span className="text-xs">Quantite minimale par couleur : {qtyMin}</span>
+                <input type="range" min={0} max={30} step={1} value={qtyMin} onChange={(e)=>setQtyMin(parseInt(e.target.value,10))} className="w-full" />
+                <div className="text-xs opacity-60">
+                  0 desactive le filtre. Reduit le nombre de references a commander et a trier, sans changement visible.
+                </div>
+                {fusions && (
+                  <div className="text-xs text-green-700">
+                    {fusions.removed} couleurs supprimees, {fusions.moved} briques reaffectees.
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* 6) Ajustements */}
@@ -1247,6 +1399,20 @@ export default function App() {
 
           {/* Aperçu + palette */}
           <div className="lg:col-span-2 bg-white rounded-2xl shadow p-4 space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm flex items-center gap-2">
+                <input type="radio" name="rendu" checked={rendu==="plat"} onChange={()=>setRendu("plat")} />
+                Apercu a plat (lecture des couleurs)
+              </label>
+              <label className="text-sm flex items-center gap-2">
+                <input type="radio" name="rendu" checked={rendu==="realiste"} onChange={()=>setRendu("realiste")} />
+                Apercu realiste (rendu monte)
+              </label>
+              <div className="text-xs opacity-60">
+                Le rendu realiste montre les tenons, les ombres et la plaque de fond visible entre les pieces. Utilisez-le pour presenter un projet a un client.
+              </div>
+            </div>
+
             <div className="overflow-auto w-full border rounded-xl">
               <canvas ref={mosaicRef} className="w-full h-auto" />
             </div>
